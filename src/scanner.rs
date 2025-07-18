@@ -110,8 +110,9 @@ impl Scanner {
                 println!("✅ Report saved to: {}", output_path.display());
             }
         } else {
-            // Default behavior - print to stdout
-            self.reporter.report_ungrouped(findings.clone())?;
+            // Default behavior - print to stdout with grouped findings
+            let grouped_findings = crate::detectors::group_findings(findings.clone());
+            self.reporter.report_grouped(grouped_findings)?;
         }
         
         // Generate Markdown report if --markdown-report flag is specified (separate from --output)

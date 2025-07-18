@@ -1,0 +1,384 @@
+[
+  {
+    "id": "3ba42a51-9a8e-43b8-a754-35bf8db22d74",
+    "detector_name": "reentrancy_vulnerability",
+    "severity": "Critical",
+    "category": "Security",
+    "confidence": 1.0,
+    "title": "Potential Reentrancy Vulnerability (5 occurrences)",
+    "description": "External call at line 33 may allow reentrancy attack. State changes detected after external call: Line 36: storage.balances.insert(. This pattern can allow an attacker to call back into the contract before state changes are finalized.\n\nFound in 5 locations:\n  • test_reentrancy.sw:33 - 30:     require(balance >= amount, \"Insufficient balance\");\n  • test_reentrancy.sw:83 - 80:     require(balance >= amount * 2, \"Insufficient balance\");\n  • test_reentrancy.sw:84 - 81:\n  • vulnerable_contract.sw:112 - 109:         // BAD: No amount validation\n  • vulnerable_contract.sw:186 - 183:     #[storage(read, write)]",
+    "file_path": "E:\\swayscan\\examples\\test_reentrancy.sw",
+    "line": 33,
+    "column": 1,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    30:     require(balance >= amount, \"Insufficient balance\");\n    31:     \n    32:     // VULNERABLE: External call before state update\n>>> 33:     transfer(Identity::Address(sender), AssetId::base(), amount);\n    34:     \n    35:     // VULNERABLE: State change after external call\n    36:     storage.balances.insert(sender, balance - amount);",
+    "recommendation": "Implement the checks-effects-interactions pattern: (1) Perform all checks, (2) Make state changes, (3) Interact with external contracts. Consider using a reentrancy guard or mutex.",
+    "impact": "Critical - Attackers can drain contract funds or manipulate state",
+    "effort": "Medium",
+    "references": [
+      {
+        "title": "Sway Security: Reentrancy Prevention",
+        "url": "https://docs.fuel.network/docs/sway/advanced/security/",
+        "reference_type": "Documentation"
+      },
+      {
+        "title": "SWC-107: Reentrancy",
+        "url": "https://swcregistry.io/docs/SWC-107",
+        "reference_type": "Standard"
+      }
+    ],
+    "cwe_ids": [
+      841,
+      362
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.915103700Z",
+    "fingerprint": "4da2e70ff33c39f6a723b558f20c17cb7b0b4c4797a542be0cabf1d67ba7445f",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 5,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "341e76e2-bc8d-441a-ae9b-1d8a8e3614d5",
+    "detector_name": "unprotected_storage_variable",
+    "severity": "High",
+    "category": "Security",
+    "confidence": 0.8,
+    "title": "Unprotected Storage Modification (9 occurrences)",
+    "description": "Storage variable is modified without proper access control\n\nFound in 9 locations:\n  • test_access_control.sw:31 - 29:     // VULNERABLE: No access control check\n  • test_access_control.sw:45 - 43:\n  • test_access_control.sw:64 - 62:\n  • test_reentrancy.sw:60 - 58:     // SECURE: Reentrancy guard\n  • test_reentrancy.sw:71 - 69:\n  • vulnerable_contract.sw:125 - 123:\n  • vulnerable_contract.sw:143 - 141:         require(amount <= 1000000, \"Amount too large\");\n  • vulnerable_contract.sw:158 - 156:         if price > 1000000 {\n  • vulnerable_contract.sw:302 - 300:     fn unsafe_write_function(value: u64) {",
+    "file_path": "E:\\swayscan\\examples\\test_access_control.sw",
+    "line": 31,
+    "column": 1,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    29:     // VULNERABLE: No access control check\n    30:     let current_supply = storage.total_supply.read();\n>>> 31:     storage.total_supply.write(current_supply + amount);\n    32:     \n    33:     let balance = storage.balances.get(to).try_read().unwrap_or(0);",
+    "recommendation": "Add access control checks before modifying storage variables",
+    "impact": "High-risk issue that could lead to security vulnerabilities or significant functional problems",
+    "effort": "Hard",
+    "references": [],
+    "cwe_ids": [],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.995619600Z",
+    "fingerprint": "65311e1cdf423ca03665f3f62d5b9eb0f6d3b0be9860d860eca1468535e5bff0",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 4,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "34413adc-73b9-4cc5-b0b6-58411714de97",
+    "detector_name": "input_validation",
+    "severity": "High",
+    "category": "Security",
+    "confidence": 0.9916666666666667,
+    "title": "Insufficient Input Validation (7 occurrences)",
+    "description": "Function at line 57 accepts parameters fn guarded_withdraw(amount: u64) but performs dangerous operations without sufficient validation: storage write, transfer, storage write. Risk factors: Financial operation context, High-risk operations present, Missing input bounds validation, Missing overflow protection. Unvalidated inputs can lead to vulnerabilities.\n\nFound in 7 locations:\n  • test_reentrancy.sw:57 - 54:\n  • test_reentrancy.sw:76 - 73:\n  • test_reentrancy.sw:76 - 73:\n  • test_reentrancy.sw:92 - 89:\n  • vulnerable_contract.sw:184 - 181:\n  • vulnerable_contract.sw:184 - 181:\n  • vulnerable_contract.sw:300 - 297:     }",
+    "file_path": "E:\\swayscan\\examples\\test_reentrancy.sw",
+    "line": 57,
+    "column": 0,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    54: \n    55: // TEST 3: Reentrancy guard pattern - SHOULD NOT be flagged\n    56: #[storage(read, write)]\n>>> 57: fn guarded_withdraw(amount: u64) {\n    58:     // SECURE: Reentrancy guard\n    59:     require(!storage.locked.read(), \"Reentrant call\");\n    60:     storage.locked.write(true);",
+    "recommendation": "Implement comprehensive input validation: (1) Add require() statements for parameter bounds, (2) Check for zero addresses/IDs, (3) Validate ranges before arithmetic operations, (4) Use checked arithmetic for financial calculations, (5) Add parameter sanitization for arrays/loops.",
+    "impact": "High-risk issue that could lead to security vulnerabilities or significant functional problems",
+    "effort": "Easy",
+    "references": [
+      {
+        "title": "OWASP Input Validation Cheat Sheet",
+        "url": "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html",
+        "reference_type": "Security"
+      }
+    ],
+    "cwe_ids": [
+      20,
+      129,
+      190
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.981233200Z",
+    "fingerprint": "ac807b9fecb7d6812af88b47f59f1e0ab7606a0f473119f947b21452b80b8780",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 5,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "8ed32065-2b42-48f6-b71c-8adfeee27c93",
+    "detector_name": "data_validation",
+    "severity": "High",
+    "category": "Security",
+    "confidence": 0.8400000000000001,
+    "title": "Missing Input Validation (5 occurrences)",
+    "description": "Function parameter 'fn guarded_withdraw(amount: u64' is used in security-critical operations without proper validation. This could lead to unexpected behavior or vulnerabilities.\n\nFound in 5 locations:\n  • test_reentrancy.sw:57 - 54:\n  • test_reentrancy.sw:76 - 73:\n  • test_reentrancy.sw:76 - 73:\n  • vulnerable_contract.sw:184 - 181:\n  • vulnerable_contract.sw:300 - 297:     }",
+    "file_path": "E:\\swayscan\\examples\\test_reentrancy.sw",
+    "line": 57,
+    "column": 0,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    54: \n    55: // TEST 3: Reentrancy guard pattern - SHOULD NOT be flagged\n    56: #[storage(read, write)]\n>>> 57: fn guarded_withdraw(amount: u64) {\n    58:     // SECURE: Reentrancy guard\n    59:     require(!storage.locked.read(), \"Reentrant call\");\n    60:     storage.locked.write(true);",
+    "recommendation": "Add input validation using require() statements to check parameter bounds, non-zero values, valid addresses, and other constraints before using parameters in critical operations.",
+    "impact": "High-risk issue that could lead to security vulnerabilities or significant functional problems",
+    "effort": "Easy",
+    "references": [
+      {
+        "title": "OWASP Input Validation Cheat Sheet",
+        "url": "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html",
+        "reference_type": "Security"
+      }
+    ],
+    "cwe_ids": [
+      20,
+      129,
+      190
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.947334200Z",
+    "fingerprint": "ac807b9fecb7d6812af88b47f59f1e0ab7606a0f473119f947b21452b80b8780",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 5,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "a00dd8da-5bba-4a6c-b2fb-091cd9a8adb0",
+    "detector_name": "business_logic",
+    "severity": "High",
+    "category": "Security",
+    "confidence": 0.85,
+    "title": "External Call in Loop (5 occurrences)",
+    "description": "Loop containing external calls detected. This pattern can lead to gas exhaustion, reentrancy attacks, or DoS conditions.\n\nFound in 5 locations:\n  • test_reentrancy.sw:32 - 30:     require(balance >= amount, \"Insufficient balance\");\n  • test_reentrancy.sw:82 - 80:     require(balance >= amount * 2, \"Insufficient balance\");\n  • vulnerable_contract.sw:96 - 94:         require(balance >= amount, \"Insufficient balance\");\n  • vulnerable_contract.sw:111 - 109:         // BAD: No amount validation\n  • vulnerable_contract.sw:185 - 183:     #[storage(read, write)]",
+    "file_path": "E:\\swayscan\\examples\\test_reentrancy.sw",
+    "line": 32,
+    "column": 0,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    30:     require(balance >= amount, \"Insufficient balance\");\n    31:     \n>>> 32:     // VULNERABLE: External call before state update\n    33:     transfer(Identity::Address(sender), AssetId::base(), amount);\n    34:     ",
+    "recommendation": "Avoid external calls in loops. Use pull-over-push pattern, batch operations, or implement proper gas limits and bounds checking.",
+    "impact": "High-risk issue that could lead to security vulnerabilities or significant functional problems",
+    "effort": "Hard",
+    "references": [],
+    "cwe_ids": [
+      834,
+      841
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.924851300Z",
+    "fingerprint": "21f692f6645e36736a9efb91468a5ff5cf0e3727b8cd0a5a2d28399d179dce0c",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 5,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "8d7d2c55-d741-42a9-8c6d-92f87489f4dd",
+    "detector_name": "cryptographic_issues",
+    "severity": "High",
+    "category": "Security",
+    "confidence": 0.85,
+    "title": "Insecure Randomness Source",
+    "description": "Using predictable or weak randomness source: timestamp for rand. This can lead to predictable outcomes in security-critical operations.",
+    "file_path": "E:\\swayscan\\examples\\vulnerable_contract.sw",
+    "line": 241,
+    "column": 22,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    239:     // TEST 8: CRYPTOGRAPHIC - WEAK\n    240:     fn weak_random_generator() -> u64 {\n>>> 241:         // BAD: Using timestamp for randomness\n    242:         let timestamp = std::block::timestamp();\n    243:         let sender_bytes = std::tx::tx_id();",
+    "recommendation": "Use a cryptographically secure random number generator (CSPRNG) or commit-reveal schemes for randomness in smart contracts.",
+    "impact": "High-risk issue that could lead to security vulnerabilities or significant functional problems",
+    "effort": "Hard",
+    "references": [],
+    "cwe_ids": [
+      338,
+      330
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.920246300Z",
+    "fingerprint": "dbfd6477e993a1b159b55cd8d7a76f4c61a49fa0b9c19c2d4a39ad0849818c6a",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 17,
+      "call_depth": 3,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "6b6b2937-e0cc-411d-a762-39496a42df1b",
+    "detector_name": "unchecked_external_calls",
+    "severity": "High",
+    "category": "Security",
+    "confidence": 1.0,
+    "title": "Unchecked External Call",
+    "description": "Asset transfer at line 32 does not check return value or handle potential failures. Call: 'transfer(to: Identity, amount: u64);'. Risk factors: High-risk financial operation, Financial context. Failed external calls can cause unexpected behavior or loss of funds.",
+    "file_path": "E:\\swayscan\\examples\\vulnerable_contract.sw",
+    "line": 32,
+    "column": 1,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    30:     // TEST 1: PROPERLY VALIDATED FUNCTION (should NOT trigger)\n    31:     #[storage(read, write)]\n>>> 32:     fn secure_transfer(to: Identity, amount: u64);\n    33:     \n    34:     // TEST 2: UNVALIDATED FINANCIAL FUNCTION (should trigger high severity)",
+    "recommendation": "Handle external call results properly: (1) Assign return value and check for success, (2) Use match statement for Result types, (3) Add require() or assert() for critical calls, (4) Consider using try-catch equivalent patterns. Example: let result = transfer(...); require(result.is_ok(), \"Call failed\");",
+    "impact": "Medium to High - Unchecked external calls can lead to silent failures, unexpected state, or loss of funds",
+    "effort": "Easy",
+    "references": [
+      {
+        "title": "Sway External Calls",
+        "url": "https://docs.fuel.network/docs/sway/advanced/external-calls/",
+        "reference_type": "Documentation"
+      },
+      {
+        "title": "SWC-104: Unchecked Call Return Value",
+        "url": "https://swcregistry.io/docs/SWC-104",
+        "reference_type": "Standard"
+      }
+    ],
+    "cwe_ids": [
+      252,
+      754,
+      703
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.964162500Z",
+    "fingerprint": "7838d76ddae0a99c279541f34e4b20de2910f323d4c03117fda916f36dc6aa53",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 17,
+      "call_depth": 3,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "8d1e3d64-6403-4074-b5e6-b5d1ad90b6f4",
+    "detector_name": "data_validation",
+    "severity": "Medium",
+    "category": "Security",
+    "confidence": 0.8,
+    "title": "Missing Bounds Checking (25 occurrences)",
+    "description": "Array or collection access 'get(to)' without bounds checking. This could lead to out-of-bounds access or panic conditions.\n\nFound in 25 locations:\n  • test_access_control.sw:33 - 31:     storage.total_supply.write(current_supply + amount);\n  • test_access_control.sw:34 - 32:\n  • test_access_control.sw:47 - 45:     storage.total_supply.write(current_supply + amount);\n  • test_access_control.sw:48 - 46:\n  • test_access_control.sw:71 - 69: fn get_balance(user: Address) -> u64 {\n  • test_reentrancy.sw:36 - 34:\n  • test_reentrancy.sw:49 - 47:\n  • test_reentrancy.sw:87 - 85:\n  • test_reentrancy.sw:94 - 92: fn safe_balance_check(user: Address) -> u64 {\n  • vulnerable_contract.sw:97 - 95:\n  • vulnerable_contract.sw:98 - 96:         // GOOD: State changes before external calls\n  • vulnerable_contract.sw:98 - 96:         // GOOD: State changes before external calls\n  • vulnerable_contract.sw:114 - 112:         transfer(caller, AssetId::base(), amount);\n  • vulnerable_contract.sw:115 - 113:\n  • vulnerable_contract.sw:127 - 125:         storage.total_supply.write(current_supply + amount); // Can overflow\n  • vulnerable_contract.sw:128 - 126:\n  • vulnerable_contract.sw:153 - 151:         // BAD: No staleness check\n  • vulnerable_contract.sw:179 - 177:         );\n  • vulnerable_contract.sw:189 - 187:\n  • vulnerable_contract.sw:190 - 188:         // BAD: State change after external call\n  • vulnerable_contract.sw:204 - 202:\n  • vulnerable_contract.sw:213 - 211:     #[storage(read, write)]\n  • vulnerable_contract.sw:214 - 212:     fn risky_liquidation(user: Identity, asset: AssetId) {\n  • vulnerable_contract.sw:221 - 219:         if collateral * price < 150000000 { // Magic number\n  • vulnerable_contract.sw:231 - 229:     #[storage(read)]",
+    "file_path": "E:\\swayscan\\examples\\test_access_control.sw",
+    "line": 33,
+    "column": 35,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    31:     storage.total_supply.write(current_supply + amount);\n    32:     \n>>> 33:     let balance = storage.balances.get(to).try_read().unwrap_or(0);\n    34:     storage.balances.insert(to, balance + amount);\n    35: }",
+    "recommendation": "Add bounds checking before array access using length checks or use safe access methods that return Option types.",
+    "impact": "Medium-risk issue that may impact security, performance, or maintainability",
+    "effort": "Easy",
+    "references": [],
+    "cwe_ids": [
+      129,
+      125
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.946130300Z",
+    "fingerprint": "b1294f70b119fbc3d718869e7ba49a87331cc8941a1297fe14b50e7eb6b34819",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 4,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "c645d2e7-9c36-4d22-9ec9-857a40bd15ec",
+    "detector_name": "data_validation",
+    "severity": "Medium",
+    "category": "Security",
+    "confidence": 0.75,
+    "title": "Missing Zero Address Check (6 occurrences)",
+    "description": "Operation using address parameter without checking for zero address. This could lead to permanent loss of assets.\n\nFound in 6 locations:\n  • test_access_control.sw:53 - 51: // TEST 3: Admin access control - SHOULD NOT be flagged\n  • test_reentrancy.sw:33 - 31:\n  • test_reentrancy.sw:52 - 50:\n  • test_reentrancy.sw:68 - 66:\n  • test_reentrancy.sw:83 - 81:\n  • test_reentrancy.sw:84 - 82:     // VULNERABLE: External calls before state update",
+    "file_path": "E:\\swayscan\\examples\\test_access_control.sw",
+    "line": 53,
+    "column": 0,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    51: // TEST 3: Admin access control - SHOULD NOT be flagged\n    52: #[storage(read, write)]  \n>>> 53: fn secure_admin_burn(from: Address, amount: u64) {\n    54:     // SECURE: Admin check\n    55:     let sender = msg_sender().unwrap().as_address().unwrap();",
+    "recommendation": "Add require(address != Address::zero()) to prevent operations with zero addresses.",
+    "impact": "Medium-risk issue that may impact security, performance, or maintainability",
+    "effort": "Trivial",
+    "references": [],
+    "cwe_ids": [
+      20
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.946524Z",
+    "fingerprint": "039e5fe53607b4b0bb668b1154e412ab574d96599050c02aacafb1dab3ae2db0",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 4,
+      "call_depth": 2,
+      "variables_in_scope": []
+    }
+  },
+  {
+    "id": "e2ed55e8-08d0-41cd-8d97-e71df963221f",
+    "detector_name": "data_validation",
+    "severity": "Medium",
+    "category": "Security",
+    "confidence": 0.85,
+    "title": "Missing Zero Amount Check (2 occurrences)",
+    "description": "Transfer operation without checking for zero amount. This wastes gas and may indicate logical errors.\n\nFound in 2 locations:\n  • vulnerable_contract.sw:32 - 30:     // TEST 1: PROPERLY VALIDATED FUNCTION (should NOT trigger)\n  • vulnerable_contract.sw:80 - 78:     // TEST 1: PROPERLY VALIDATED FUNCTION",
+    "file_path": "E:\\swayscan\\examples\\vulnerable_contract.sw",
+    "line": 32,
+    "column": 14,
+    "end_line": null,
+    "end_column": null,
+    "code_snippet": "    30:     // TEST 1: PROPERLY VALIDATED FUNCTION (should NOT trigger)\n    31:     #[storage(read, write)]\n>>> 32:     fn secure_transfer(to: Identity, amount: u64);\n    33:     \n    34:     // TEST 2: UNVALIDATED FINANCIAL FUNCTION (should trigger high severity)",
+    "recommendation": "Add require(amount > 0) before transfer operations to prevent zero-value transfers.",
+    "impact": "Medium-risk issue that may impact security, performance, or maintainability",
+    "effort": "Trivial",
+    "references": [],
+    "cwe_ids": [
+      20
+    ],
+    "owasp_category": null,
+    "tags": [],
+    "created_at": "2025-07-18T11:16:50.951786Z",
+    "fingerprint": "c6bcf4859b3bc8ac73704aad26ee404713348a9ff167613034f0c6b92e26b309",
+    "context": {
+      "function_name": null,
+      "contract_type": "analyzed",
+      "dependencies": [],
+      "complexity_score": 17,
+      "call_depth": 3,
+      "variables_in_scope": []
+    }
+  }
+]
