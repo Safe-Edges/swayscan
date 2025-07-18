@@ -64,12 +64,60 @@ impl Scanner {
     }
 
     pub fn report_results(&self, findings: Vec<Finding>) -> Result<(), SwayscanError> {
-        self.reporter.report_ungrouped(findings.clone())?;
+        // Generate and save output if --output flag is specified
+        if let Some(output_path) = &self.args.output {
+            if self.args.verbose {
+                println!("Saving report to: {}", output_path.display());
+            }
+            
+            // Check file extension to determine format
+            let extension = output_path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("");
+            
+            match extension.to_lowercase().as_str() {
+                "md" | "markdown" => {
+                    // Use the beautiful Markdown template
+                    let markdown_generator = crate::markdown_generator::MarkdownGenerator::new();
+                    let project_name = self.args.directory.as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .or_else(|| {
+                            self.args.files.get(0)
+                                .and_then(|f| f.file_stem())
+                                .and_then(|n| n.to_str())
+                        });
+                    
+                    markdown_generator.generate_report(&findings, output_path, project_name)
+                        .map_err(|e| SwayscanError::FileNotFound(format!("Failed to generate Markdown report: {}", e)))?;
+                }
+                "json" => {
+                    // Generate JSON format
+                    let report_content = serde_json::to_string_pretty(&findings)
+                        .map_err(|e| SwayscanError::FileNotFound(format!("JSON serialization error: {}", e)))?;
+                    std::fs::write(output_path, report_content)
+                        .map_err(|e| SwayscanError::FileNotFound(format!("Failed to write to {}: {}", output_path.display(), e)))?;
+                }
+                _ => {
+                    // Default to text format for other extensions
+                    let report_content = self.generate_text_report(&findings);
+                    std::fs::write(output_path, report_content)
+                        .map_err(|e| SwayscanError::FileNotFound(format!("Failed to write to {}: {}", output_path.display(), e)))?;
+                }
+            }
+            
+            if self.args.verbose {
+                println!("✅ Report saved to: {}", output_path.display());
+            }
+        } else {
+            // Default behavior - print to stdout
+            self.reporter.report_ungrouped(findings.clone())?;
+        }
         
-        // Generate Markdown report if requested
+        // Generate Markdown report if --markdown-report flag is specified (separate from --output)
         if self.args.should_generate_markdown() {
             if self.args.verbose {
-                println!("Generating Markdown security audit report...");
+                println!("Generating additional Markdown security audit report...");
             }
             
             let markdown_generator = crate::markdown_generator::MarkdownGenerator::new();
@@ -89,11 +137,11 @@ impl Scanner {
             ) {
                 Ok(()) => {
                     if self.args.verbose {
-                        println!("✅ Markdown report generated: {:?}", self.args.markdown_report.as_ref().unwrap());
+                        println!("✅ Additional Markdown report generated: {:?}", self.args.markdown_report.as_ref().unwrap());
                     }
                 }
                 Err(e) => {
-                    eprintln!("❌ Failed to generate Markdown report: {}", e);
+                    eprintln!("❌ Failed to generate additional Markdown report: {}", e);
                 }
             }
         }
@@ -105,6 +153,39 @@ impl Scanner {
         // PDF generation removed - use --markdown-report for professional reports
         eprintln!("PDF generation has been removed. Use --markdown-report instead for professional audit reports.");
         Ok(())
+    }
+
+    fn generate_text_report(&self, findings: &[Finding]) -> String {
+        let mut output = String::new();
+        
+        output.push_str("SwayScanner Analysis Report\n");
+        output.push_str(&"═".repeat(54));
+        output.push('\n');
+        output.push_str(&format!("{} findings found:\n\n", findings.len()));
+
+        for finding in findings {
+            output.push_str(&format!("[{}] {} ({})\n", 
+                finding.severity.as_str(),
+                finding.title,
+                finding.detector_name
+            ));
+            output.push_str(&format!("   Location: {}:{}\n", 
+                finding.file_path,
+                finding.line
+            ));
+            output.push_str(&format!("   Description: {}\n", finding.description));
+            
+            if !finding.code_snippet.is_empty() {
+                output.push_str(&format!("   Code: {}\n", finding.code_snippet));
+            }
+            
+            output.push_str(&format!("   Recommendation: {}\n\n", finding.recommendation));
+        }
+
+        output.push_str(&"═".repeat(54));
+        output.push_str("\nAnalysis completed by SwayScanner\n");
+        
+        output
     }
 
     fn collect_sway_files(&self) -> Result<Vec<PathBuf>, SwayscanError> {
