@@ -1,0 +1,54 @@
+# Build artifacts
+/target/
+Cargo.lock
+
+# Generated reports and outputs
+*.pdf
+*.md.html
+audit_report.*
+security_audit_report.*
+comprehensive_audit_report.*
+test_audit_report.*
+
+# Debug and test files
+debug_test.*
+*_test_scenarios.*
+vulnerable_contract_temp.*
+simple_vulnerable.*
+
+# Temporary documentation
+*_GUIDE.md
+*_SUMMARY.md
+*_TEMPLATE.md
+*_ANALYSIS.md
+*_COMPLETED.md
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Dependency directories
+node_modules/

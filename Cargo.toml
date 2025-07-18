@@ -1,0 +1,69 @@
+[package]
+name = "swayscan"
+version = "0.2.1"
+edition = "2021"
+authors = ["Safe Edges Team <info@safeedges.in>"]
+description = "Advanced security scanner for Sway smart contracts with comprehensive vulnerability detection and minimal false positives"
+license = "MIT"
+repository = "https://github.com/Safe-Edges/swayscan"
+homepage = "https://safeedges.in"
+documentation = "https://docs.rs/swayscan"
+keywords = ["sway", "security", "analyzer", "fuel", "blockchain"]
+categories = ["development-tools", "command-line-utilities", "web-programming"]
+readme = "README.md"
+rust-version = "1.70"
+exclude = [
+    "target/",
+    "*.pdf",
+    "*.log",
+    "*_test_*",
+    "test_*",
+    "debug_*",
+    "temp_*",
+    "vulnerable_contract.sw",
+    "simple_vulnerable.sw",
+    "*_GUIDE.md",
+    "*_SUMMARY.md", 
+    "*_TEMPLATE.md",
+    "*_ANALYSIS.md",
+    "*_COMPLETED.md",
+    "TEST_*.md",
+    "INSTALLATION_*.md",
+    "PUBLISHING_*.md",
+    ".git/",
+    ".vscode/",
+    ".idea/",
+    "*.swp",
+    "*.swo"
+]
+
+[[bin]]
+name = "swayscan"
+path = "src/main.rs"
+
+[[bin]]
+name = "forc-swayscan"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+walkdir = "2.3"
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+colored = "2.0"
+sha2 = "0.10"
+thiserror = "1.0"
+anyhow = "1.0"
+once_cell = "1.19"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort" 
