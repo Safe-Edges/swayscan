@@ -3,8 +3,69 @@ use crate::error::SwayscanError;
 use crate::parser::SwayFile;
 use regex::Regex;
 use once_cell::sync::Lazy;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct LogicErrorDetector;
+
+// Advanced Analysis Structures for Logic Errors
+#[derive(Debug, Clone)]
+struct LogicFCG {
+    callers: HashMap<String, HashSet<String>>,
+    callees: HashMap<String, HashSet<String>>,
+    function_signatures: HashMap<String, LogicSignature>,
+}
+
+#[derive(Debug, Clone)]
+struct LogicSignature {
+    name: String,
+    line_start: usize,
+    line_end: usize,
+    logic_operations: Vec<String>,
+    has_validation: bool,
+    validation_context: Vec<String>,
+    risk_level: LogicRiskLevel,
+    called_by_safe_functions: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LogicRiskLevel {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone)]
+struct LogicPPL {
+    safe_functions: HashSet<String>,
+    safety_sources: HashMap<String, Vec<String>>,
+    propagation_paths: HashMap<String, Vec<String>>,
+    safety_strength: HashMap<String, SafetyStrength>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SafetyStrength {
+    Weak,    // Basic checks
+    Medium,  // Boundary checks
+    Strong,  // Comprehensive validation
+    Robust,  // Multiple validation layers
+}
+
+#[derive(Debug, Clone)]
+struct LogicPDG {
+    logic_flows: HashMap<String, Vec<String>>,
+    validation_dependencies: HashMap<String, Vec<String>>,
+    critical_logic: HashSet<String>,
+    validation_coverage: HashMap<String, f64>,
+}
+
+#[derive(Debug, Clone)]
+struct LogicCVC {
+    valid_contexts: HashSet<String>,
+    context_rules: HashMap<String, Vec<String>>,
+    validation_results: HashMap<String, bool>,
+    false_positive_filters: HashSet<String>,
+}
 
 // Logic error patterns
 static LOGIC_ERROR_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
@@ -66,9 +127,510 @@ static INCORRECT_ORDER: Lazy<Vec<Regex>> = Lazy::new(|| {
     ]
 });
 
+// Validation patterns
+static VALIDATION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"require\s*\(").unwrap(),
+        Regex::new(r"assert\s*\(").unwrap(),
+        Regex::new(r"if\s*let\s*").unwrap(),
+        Regex::new(r"match\s*").unwrap(),
+        Regex::new(r"unwrap_or\(").unwrap(),
+        Regex::new(r"expect\(").unwrap(),
+    ]
+});
+
+// Strong validation patterns
+static STRONG_VALIDATION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"require\s*\(\s*[^)]*\.len\s*>\s*0").unwrap(), // Length validation
+        Regex::new(r"require\s*\(\s*[^)]*\.is_some\s*\)").unwrap(), // Option validation
+        Regex::new(r"require\s*\(\s*[^)]*\.is_ok\s*\)").unwrap(), // Result validation
+        Regex::new(r"if\s*let\s*Some\s*\(\s*[^)]*\)\s*=\s*[^)]*").unwrap(), // Pattern matching
+        Regex::new(r"match\s*[^{]*\{[^}]*=>\s*[^}]*,").unwrap(), // Comprehensive matching
+    ]
+});
+
+// Critical logic patterns
+static CRITICAL_LOGIC_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"transfer\s*\(").unwrap(), // Transfer operations
+        Regex::new(r"mint\s*\(").unwrap(), // Mint operations
+        Regex::new(r"burn\s*\(").unwrap(), // Burn operations
+        Regex::new(r"storage\.[\w\.]*\.write\s*\(").unwrap(), // Storage writes
+        Regex::new(r"abi\s*\(").unwrap(), // External calls
+        Regex::new(r"contract_call\s*\(").unwrap(), // Contract calls
+    ]
+});
+
+// Safe function patterns
+static SAFE_FUNCTION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"(?i)view|pure|get|read|query").unwrap(),
+        Regex::new(r"fn\s+test_").unwrap(), // Test functions
+        Regex::new(r"#\[test\]").unwrap(), // Test annotations
+        Regex::new(r"fn\s+init").unwrap(), // Initialization functions
+    ]
+});
+
+// Function call patterns for FCG
+static FUNCTION_CALL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        Regex::new(r"(\w+)\s*\([^)]*\)").unwrap(), // Basic function calls
+        Regex::new(r"self\.(\w+)\s*\([^)]*\)").unwrap(), // Self function calls
+        Regex::new(r"(\w+)\.(\w+)\s*\([^)]*\)").unwrap(), // External contract calls
+    ]
+});
+
 impl LogicErrorDetector {
     pub fn new() -> Self {
         Self
+    }
+
+    // Function Call Graph (FCG) - maps callers and callees for logic operations
+    fn build_logic_fcg(&self, file: &SwayFile) -> LogicFCG {
+        let mut fcg = LogicFCG {
+            callers: HashMap::new(),
+            callees: HashMap::new(),
+            function_signatures: HashMap::new(),
+        };
+
+        let lines: Vec<&str> = file.content.lines().collect();
+        let mut current_function: Option<String> = None;
+        let mut function_start = 0;
+
+        for (line_num, line) in lines.iter().enumerate() {
+            let line_num = line_num + 1;
+            let trimmed = line.trim();
+
+            // Detect function definitions
+            if trimmed.starts_with("fn ") {
+                if let Some(func_name) = self.extract_function_name(line) {
+                    if let Some(current) = &current_function {
+                        // Store previous function signature
+                        let signature = LogicSignature {
+                            name: current.clone(),
+                            line_start: function_start,
+                            line_end: line_num - 1,
+                            logic_operations: self.extract_logic_operations(&lines, function_start, line_num - 1),
+                            has_validation: self.has_validation_in_function(&lines, function_start),
+                            validation_context: self.extract_validation_context(&lines, function_start, line_num - 1),
+                            risk_level: self.calculate_logic_risk_level(&lines, function_start),
+                            called_by_safe_functions: false,
+                        };
+                        fcg.function_signatures.insert(current.clone(), signature);
+                    }
+
+                    current_function = Some(func_name.clone());
+                    function_start = line_num;
+                    
+                    // Initialize callers/callees for new function
+                    fcg.callers.entry(func_name.clone()).or_insert_with(HashSet::new);
+                    fcg.callees.entry(func_name.clone()).or_insert_with(HashSet::new);
+                }
+            }
+
+            // Detect function calls within current function
+            if let Some(current_func) = &current_function {
+                let calls = self.extract_function_calls(line);
+                for call in calls {
+                    fcg.callers.entry(call.clone()).or_insert_with(HashSet::new).insert(current_func.clone());
+                    fcg.callees.entry(current_func.clone()).or_insert_with(HashSet::new).insert(call);
+                }
+            }
+        }
+
+        // Store the last function
+        if let Some(current) = &current_function {
+            let signature = LogicSignature {
+                name: current.clone(),
+                line_start: function_start,
+                line_end: lines.len(),
+                logic_operations: self.extract_logic_operations(&lines, function_start, lines.len()),
+                has_validation: self.has_validation_in_function(&lines, function_start),
+                validation_context: self.extract_validation_context(&lines, function_start, lines.len()),
+                risk_level: self.calculate_logic_risk_level(&lines, function_start),
+                called_by_safe_functions: false,
+            };
+            fcg.function_signatures.insert(current.clone(), signature);
+        }
+
+        fcg
+    }
+
+    // Protection Propagation Layer (PPL) - propagates safety conditions
+    fn build_logic_ppl(&self, fcg: &LogicFCG) -> LogicPPL {
+        let mut ppl = LogicPPL {
+            safe_functions: HashSet::new(),
+            safety_sources: HashMap::new(),
+            propagation_paths: HashMap::new(),
+            safety_strength: HashMap::new(),
+        };
+
+        // Find functions with direct validation
+        for (func_name, signature) in &fcg.function_signatures {
+            if signature.has_validation {
+                ppl.safe_functions.insert(func_name.clone());
+                ppl.safety_sources.insert(func_name.clone(), vec![func_name.clone()]);
+                
+                // Determine safety strength
+                let strength = self.determine_safety_strength(&signature.validation_context);
+                ppl.safety_strength.insert(func_name.clone(), strength);
+            }
+        }
+
+        // Propagate safety through call chains
+        let mut queue: VecDeque<String> = ppl.safe_functions.iter().cloned().collect();
+        let mut visited = HashSet::new();
+
+        while let Some(current_func) = queue.pop_front() {
+            if visited.contains(&current_func) {
+                continue;
+            }
+            visited.insert(current_func.clone());
+
+            // Propagate to callers (functions that call this safe function)
+            if let Some(callers) = fcg.callers.get(&current_func) {
+                for caller in callers {
+                    if !ppl.safe_functions.contains(caller) {
+                        ppl.safe_functions.insert(caller.clone());
+                        
+                        // Build propagation path
+                        let empty_path: Vec<String> = Vec::new();
+                        let mut path = ppl.propagation_paths.get(&current_func).unwrap_or(&empty_path).clone();
+                        path.push(current_func.clone());
+                        ppl.propagation_paths.insert(caller.clone(), path);
+                        
+                        // Inherit safety strength (but reduce it)
+                        if let Some(strength) = ppl.safety_strength.get(&current_func) {
+                            let inherited_strength = match strength {
+                                SafetyStrength::Robust => SafetyStrength::Strong,
+                                SafetyStrength::Strong => SafetyStrength::Medium,
+                                SafetyStrength::Medium => SafetyStrength::Weak,
+                                SafetyStrength::Weak => SafetyStrength::Weak,
+                            };
+                            ppl.safety_strength.insert(caller.clone(), inherited_strength);
+                        }
+                        
+                        queue.push_back(caller.clone());
+                    }
+                }
+            }
+        }
+
+        ppl
+    }
+
+    // Parameter Dependency Graph (PDG) - tracks how logic operations and validation flow
+    fn build_logic_pdg(&self, file: &SwayFile, fcg: &LogicFCG) -> LogicPDG {
+        let mut pdg = LogicPDG {
+            logic_flows: HashMap::new(),
+            validation_dependencies: HashMap::new(),
+            critical_logic: HashSet::new(),
+            validation_coverage: HashMap::new(),
+        };
+
+        let lines: Vec<&str> = file.content.lines().collect();
+
+        for (func_name, signature) in &fcg.function_signatures {
+            let mut flows = Vec::new();
+            let mut validations = Vec::new();
+            let mut coverage: f64 = 0.0;
+
+            // Analyze logic flows within function
+            for line_num in signature.line_start..signature.line_end {
+                if line_num >= lines.len() {
+                    break;
+                }
+                let line = lines[line_num];
+
+                // Track logic operations
+                if LOGIC_ERROR_PATTERNS.iter().any(|p| p.is_match(line)) ||
+                   OFF_BY_ONE_PATTERNS.iter().any(|p| p.is_match(line)) ||
+                   INCORRECT_COMPARISONS.iter().any(|p| p.is_match(line)) {
+                    flows.push(line.trim().to_string());
+                }
+
+                // Track validation patterns
+                if VALIDATION_PATTERNS.iter().any(|p| p.is_match(line)) {
+                    validations.push(line.trim().to_string());
+                    coverage += 0.25; // Increment coverage for each validation
+                }
+            }
+
+            pdg.logic_flows.insert(func_name.clone(), flows);
+            pdg.validation_dependencies.insert(func_name.clone(), validations);
+            pdg.validation_coverage.insert(func_name.clone(), coverage.min(1.0));
+
+            // Identify critical logic
+            for operation in &signature.logic_operations {
+                if CRITICAL_LOGIC_PATTERNS.iter().any(|p| p.is_match(operation)) {
+                    pdg.critical_logic.insert(func_name.clone());
+                }
+            }
+        }
+
+        pdg
+    }
+
+    // Context Validity Checker (CVC) - final validator for logic safety
+    fn logic_cvc(&self, fcg: &LogicFCG, ppl: &LogicPPL, pdg: &LogicPDG) -> LogicCVC {
+        let mut cvc = LogicCVC {
+            valid_contexts: HashSet::new(),
+            context_rules: HashMap::new(),
+            validation_results: HashMap::new(),
+            false_positive_filters: HashSet::new(),
+        };
+
+        for (func_name, signature) in &fcg.function_signatures {
+            let mut is_valid = true;
+            let mut rules = Vec::new();
+
+            // Rule 1: Functions with logic operations must have validation
+            if !signature.logic_operations.is_empty() && signature.risk_level == LogicRiskLevel::High {
+                if !signature.has_validation && !ppl.safe_functions.contains(func_name) {
+                    is_valid = false;
+                    rules.push("High-risk function with logic operations lacks validation".to_string());
+                }
+            }
+
+            // Rule 2: Functions called by safe functions should be safe
+            if let Some(callees) = fcg.callees.get(func_name) {
+                for callee in callees {
+                    if ppl.safe_functions.contains(callee) && !ppl.safe_functions.contains(func_name) {
+                        is_valid = false;
+                        rules.push(format!("Function called by safe function '{}' but not safe", callee));
+                    }
+                }
+            }
+
+            // Rule 3: Check validation coverage for critical logic
+            if pdg.critical_logic.contains(func_name) {
+                if let Some(coverage) = pdg.validation_coverage.get(func_name) {
+                    if *coverage < 0.5 {
+                        is_valid = false;
+                        rules.push("Insufficient validation coverage for critical logic operations".to_string());
+                    }
+                }
+            }
+
+            // Rule 4: Filter out false positives
+            if self.is_false_positive(func_name, signature, ppl) {
+                cvc.false_positive_filters.insert(func_name.clone());
+                is_valid = true; // Override to true for false positives
+            }
+
+            // Rule 5: Check for strong validation patterns
+            if signature.risk_level == LogicRiskLevel::Critical {
+                if let Some(strength) = ppl.safety_strength.get(func_name) {
+                    if *strength == SafetyStrength::Weak {
+                        is_valid = false;
+                        rules.push("Critical function has weak validation".to_string());
+                    }
+                }
+            }
+
+            cvc.validation_results.insert(func_name.clone(), is_valid);
+            cvc.context_rules.insert(func_name.clone(), rules);
+
+            if is_valid {
+                cvc.valid_contexts.insert(func_name.clone());
+            }
+        }
+
+        cvc
+    }
+
+    // Helper methods for FCG
+    fn extract_function_name(&self, line: &str) -> Option<String> {
+        let func_pattern = Regex::new(r"fn\s+(\w+)").unwrap();
+        func_pattern.captures(line).map(|caps| caps[1].to_string())
+    }
+
+    fn extract_logic_operations(&self, lines: &[&str], start_line: usize, end_line: usize) -> Vec<String> {
+        let mut operations = Vec::new();
+        for i in start_line..std::cmp::min(end_line, lines.len()) {
+            let line = lines[i];
+            if LOGIC_ERROR_PATTERNS.iter().any(|p| p.is_match(line)) ||
+               OFF_BY_ONE_PATTERNS.iter().any(|p| p.is_match(line)) ||
+               INCORRECT_COMPARISONS.iter().any(|p| p.is_match(line)) {
+                operations.push(line.trim().to_string());
+            }
+        }
+        operations
+    }
+
+    fn has_validation_in_function(&self, lines: &[&str], start_line: usize) -> bool {
+        for i in start_line..std::cmp::min(start_line + 20, lines.len()) {
+            let line = lines[i];
+            
+            if i > start_line && line.trim_start().starts_with("fn ") {
+                break;
+            }
+            
+            if VALIDATION_PATTERNS.iter().any(|p| p.is_match(line)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn extract_validation_context(&self, lines: &[&str], start_line: usize, end_line: usize) -> Vec<String> {
+        let mut context = Vec::new();
+        for i in start_line..std::cmp::min(end_line, lines.len()) {
+            let line = lines[i];
+            if VALIDATION_PATTERNS.iter().any(|p| p.is_match(line)) {
+                context.push(line.trim().to_string());
+            }
+        }
+        context
+    }
+
+    fn calculate_logic_risk_level(&self, lines: &[&str], start_line: usize) -> LogicRiskLevel {
+        let mut risk_score = 0;
+        
+        for i in start_line..std::cmp::min(start_line + 15, lines.len()) {
+            let line = lines[i];
+            
+            if LOGIC_ERROR_PATTERNS.iter().any(|p| p.is_match(line)) {
+                risk_score += 2;
+            }
+            
+            if CRITICAL_LOGIC_PATTERNS.iter().any(|p| p.is_match(line)) {
+                risk_score += 3;
+            }
+            
+            if OFF_BY_ONE_PATTERNS.iter().any(|p| p.is_match(line)) {
+                risk_score += 2;
+            }
+        }
+        
+        match risk_score {
+            0..=2 => LogicRiskLevel::Low,
+            3..=5 => LogicRiskLevel::Medium,
+            6..=8 => LogicRiskLevel::High,
+            _ => LogicRiskLevel::Critical,
+        }
+    }
+
+    fn extract_function_calls(&self, line: &str) -> Vec<String> {
+        let mut calls = Vec::new();
+        for pattern in FUNCTION_CALL_PATTERNS.iter() {
+            if let Some(captures) = pattern.captures(line) {
+                if captures.len() > 1 {
+                    calls.push(captures[1].to_string());
+                }
+            }
+        }
+        calls
+    }
+
+    // Helper methods for PPL
+    fn determine_safety_strength(&self, validation_context: &[String]) -> SafetyStrength {
+        let mut strength_score = 0;
+        
+        for validation in validation_context {
+            if STRONG_VALIDATION_PATTERNS.iter().any(|p| p.is_match(validation)) {
+                strength_score += 3;
+            } else if VALIDATION_PATTERNS.iter().any(|p| p.is_match(validation)) {
+                strength_score += 1;
+            }
+        }
+        
+        match strength_score {
+            0 => SafetyStrength::Weak,
+            1..=2 => SafetyStrength::Medium,
+            3..=5 => SafetyStrength::Strong,
+            _ => SafetyStrength::Robust,
+        }
+    }
+
+    // Helper methods for CVC
+    fn is_false_positive(&self, func_name: &str, signature: &LogicSignature, ppl: &LogicPPL) -> bool {
+        // Filter out safe functions
+        if SAFE_FUNCTION_PATTERNS.iter().any(|p| p.is_match(func_name)) {
+            return true;
+        }
+        
+        // Filter out functions with strong validation
+        if ppl.safe_functions.contains(func_name) {
+            if let Some(strength) = ppl.safety_strength.get(func_name) {
+                if *strength == SafetyStrength::Strong || *strength == SafetyStrength::Robust {
+                    return true;
+                }
+            }
+        }
+        
+        // Filter out low-risk functions
+        if signature.risk_level == LogicRiskLevel::Low {
+            return true;
+        }
+        
+        false
+    }
+
+    // Enhanced analysis with advanced layers
+    fn analyze_with_advanced_layers(&self, file: &SwayFile, context: &AnalysisContext) -> Vec<Finding> {
+        let mut findings = Vec::new();
+
+        // Build Function Call Graph
+        let fcg = self.build_logic_fcg(file);
+        
+        // Build Protection Propagation Layer
+        let ppl = self.build_logic_ppl(&fcg);
+        
+        // Build Parameter Dependency Graph
+        let pdg = self.build_logic_pdg(file, &fcg);
+        
+        // Run Context Validity Checker
+        let cvc = self.logic_cvc(&fcg, &ppl, &pdg);
+
+        // Generate findings based on advanced analysis
+        for (func_name, is_valid) in &cvc.validation_results {
+            if !is_valid && !cvc.false_positive_filters.contains(func_name) {
+                if let Some(signature) = fcg.function_signatures.get(func_name) {
+                    let empty_rules: Vec<String> = Vec::new();
+                    let rules = cvc.context_rules.get(func_name).unwrap_or(&empty_rules);
+                    
+                    let severity = match signature.risk_level {
+                        LogicRiskLevel::Critical => Severity::Critical,
+                        LogicRiskLevel::High => Severity::High,
+                        LogicRiskLevel::Medium => Severity::Medium,
+                        LogicRiskLevel::Low => Severity::Low,
+                    };
+
+                    let confidence = if ppl.safe_functions.contains(func_name) {
+                        0.6 // Lower confidence if function is safe
+                    } else {
+                        0.9 // High confidence for unsafe functions
+                    };
+
+                    findings.push(
+                        Finding::new(
+                            self.name(),
+                            severity,
+                            Category::Reliability,
+                            confidence,
+                            "Advanced Logic Error Analysis",
+                            &format!(
+                                "Function '{}' failed advanced logic validation. Issues: {}",
+                                func_name,
+                                rules.join(", ")
+                            ),
+                            &file.path,
+                            signature.line_start,
+                            0,
+                            extract_code_snippet(&file.content, signature.line_start, 5),
+                            "Implement comprehensive logic validation mechanisms and ensure all logic operations are properly validated through the call chain.",
+                        )
+                        .with_context(context.clone())
+                        .with_cwe(vec![754, 682, 561])
+                        .with_effort(EstimatedEffort::Medium)
+                    );
+                }
+            }
+        }
+
+        findings
     }
 
     fn find_logic_errors(&self, content: &str) -> Vec<(usize, String, String)> {
@@ -140,7 +702,7 @@ impl LogicErrorDetector {
         lines[start..end].join("\n")
     }
 
-    fn calculate_logic_risk(&self, line: &str, error_type: &str, function_content: &str) -> f64 {
+    fn calculate_logic_risk(&self, _line: &str, error_type: &str, function_content: &str) -> f64 {
         let mut risk_score: f64 = 0.0;
         
         // Base risk varies by error type
@@ -234,7 +796,7 @@ impl Detector for LogicErrorDetector {
     }
     
     fn description(&self) -> &'static str {
-        "Detects logic errors including off-by-one errors, incorrect comparisons, and state inconsistencies"
+        "Detects logic errors including off-by-one errors, incorrect comparisons, and state inconsistencies using advanced analysis layers (FCG, PPL, PDG, CVC)"
     }
     
     fn category(&self) -> Category {
@@ -246,9 +808,12 @@ impl Detector for LogicErrorDetector {
     }
     
     fn analyze(&self, file: &SwayFile, context: &AnalysisContext) -> Result<Vec<Finding>, SwayscanError> {
-        let mut findings = Vec::new();
+        let mut all_findings = Vec::new();
         
-        // Find logic errors
+        // Enhanced analysis with advanced layers
+        all_findings.extend(self.analyze_with_advanced_layers(file, context));
+        
+        // Traditional analysis for backward compatibility
         let logic_errors = self.find_logic_errors(&file.content);
         
         for (line_num, pattern, error_type) in logic_errors {
@@ -316,10 +881,10 @@ impl Detector for LogicErrorDetector {
                 ])
                 .with_context(context.clone());
                 
-                findings.push(finding);
+                all_findings.push(finding);
             }
         }
         
-        Ok(findings)
+        Ok(all_findings)
     }
 } 

@@ -201,7 +201,7 @@ impl Detector for FlashLoanDetector {
         // Find flash loan usage
         let flash_loans = self.find_flash_loan_usage(&file.content);
         
-        for (flash_line, flash_pattern) in flash_loans {
+        for (flash_line, _flash_pattern) in flash_loans {
             let function_content = self.extract_function_context(&file.content, flash_line);
             
             // Find vulnerable operations in the same context

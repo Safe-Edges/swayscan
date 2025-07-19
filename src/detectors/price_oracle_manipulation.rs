@@ -230,7 +230,7 @@ impl Detector for PriceOracleDetector {
         // Find all oracle calls
         let oracle_calls = self.find_oracle_calls(&file.content);
         
-        for (oracle_line, oracle_pattern) in oracle_calls {
+        for (oracle_line, _oracle_pattern) in oracle_calls {
             let function_content = self.extract_function_context(&file.content, oracle_line);
             
             // Check for risky patterns
