@@ -1,4 +1,4 @@
-use crate::detectors::{Detector, Finding, Severity, Category, AnalysisContext, extract_code_snippet, Reference, ReferenceType, EstimatedEffort};
+use crate::detectors::{Detector, Finding, Severity, Category, AnalysisContext, extract_code_snippet, EstimatedEffort};
 use crate::error::SwayscanError;
 use crate::parser::SwayFile;
 use regex::Regex;
