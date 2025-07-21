@@ -55,3 +55,34 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
         format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 } 
+
+/// Map a byte offset to a line number in the file
+pub fn byte_offset_to_line(content: &str, offset: usize) -> usize {
+    if offset == 0 { return 1; }
+    let mut line = 1;
+    let mut count = 0;
+    for (i, c) in content.chars().enumerate() {
+        if i >= offset { break; }
+        if c == '\n' { line += 1; }
+        count += 1;
+    }
+    line
+} 
+
+/// Map a byte offset to a (line, column) in the file
+pub fn byte_offset_to_line_col(content: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    let mut count = 0;
+    for c in content.chars() {
+        if count == offset { break; }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+        count += 1;
+    }
+    (line, col)
+} 

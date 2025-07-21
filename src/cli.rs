@@ -1,5 +1,6 @@
-use clap::ArgMatches;
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::path::{Path, PathBuf};
+use crate::detectors::Severity;
 
 #[derive(Debug, Clone)]
 pub struct Args {
@@ -243,6 +244,16 @@ impl std::fmt::Display for SeverityLevel {
             SeverityLevel::Low => write!(f, "low"),
             SeverityLevel::Medium => write!(f, "medium"),
             SeverityLevel::High => write!(f, "high"),
+        }
+    }
+}
+
+impl From<SeverityLevel> for Severity {
+    fn from(level: SeverityLevel) -> Self {
+        match level {
+            SeverityLevel::Low => Severity::Low,
+            SeverityLevel::Medium => Severity::Medium,
+            SeverityLevel::High => Severity::High,
         }
     }
 }

@@ -2,6 +2,7 @@ use crate::cli::Args;
 use crate::detectors::{DetectorRegistry, Finding};
 use crate::error::SwayscanError;
 use crate::parser::{SwayParser, SwayFile};
+use crate::analyzer::SwayAstAnalyzer;
 use crate::reporter::Reporter;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -10,6 +11,7 @@ pub struct Scanner {
     args: Args,
     detector_registry: DetectorRegistry,
     reporter: Reporter,
+    ast_analyzer: SwayAstAnalyzer,
 }
 
 impl Scanner {
@@ -22,11 +24,13 @@ impl Scanner {
 
         let detector_registry = DetectorRegistry::new();
         let reporter = Reporter::new(args.display_format.clone(), args.sorting.clone());
+        let ast_analyzer = SwayAstAnalyzer::new();
 
         Ok(Self {
             args,
             detector_registry,
             reporter,
+            ast_analyzer,
         })
     }
 
@@ -45,19 +49,19 @@ impl Scanner {
 
         if self.args.verbose {
             println!("Found {} Sway files", files.len());
-            println!("Parsing files...");
+            println!("Parsing files with Sway AST...");
         }
 
         let parsed_files = self.parse_files(files)?;
 
         if self.args.verbose {
-            println!("Running detectors...");
+            println!("Running AST-based detectors...");
         }
 
         let findings = self.run_detectors(parsed_files)?;
 
         if self.args.verbose {
-            println!("Analysis complete. Found {} issues", findings.len());
+            println!("AST-based analysis complete. Found {} issues", findings.len());
         }
 
         Ok(findings)
@@ -159,7 +163,7 @@ impl Scanner {
     fn generate_text_report(&self, findings: &[Finding]) -> String {
         let mut output = String::new();
         
-        output.push_str("SwayScanner Analysis Report\n");
+        output.push_str("SwayScanner AST-Based Analysis Report\n");
         output.push_str(&"═".repeat(54));
         output.push('\n');
         output.push_str(&format!("{} findings found:\n\n", findings.len()));
@@ -184,7 +188,7 @@ impl Scanner {
         }
 
         output.push_str(&"═".repeat(54));
-        output.push_str("\nAnalysis completed by SwayScanner\n");
+        output.push_str("\nAST-based analysis completed by SwayScanner\n");
         
         output
     }
@@ -201,70 +205,29 @@ impl Scanner {
                     .into_iter()
                     .filter_map(|e| e.ok())
                 {
-                    let path = entry.path();
-                    if self.is_sway_file(path) {
-                        files.push(path.to_path_buf());
+                    if entry.file_type().is_file() && self.is_sway_file(entry.path()) {
+                        files.push(entry.path().to_path_buf());
                     }
                 }
-            } else {
-                if !file_path.exists() {
-                    return Err(SwayscanError::FileNotFound(
-                        file_path.to_string_lossy().to_string(),
-                    ));
-                }
-
-                if !self.is_sway_file(file_path) {
-                    return Err(SwayscanError::InvalidFileExtension(
-                        file_path.to_string_lossy().to_string(),
-                    ));
-                }
-
+            } else if file_path.is_file() && self.is_sway_file(file_path) {
                 files.push(file_path.clone());
             }
         }
 
         // Add files from --directory argument
-        if let Some(ref directory) = self.args.directory {
-            if !directory.exists() {
-                return Err(SwayscanError::FileNotFound(
-                    directory.to_string_lossy().to_string(),
-                ));
-            }
-
-            for entry in WalkDir::new(directory)
+        if let Some(dir_path) = &self.args.directory {
+            for entry in WalkDir::new(dir_path)
                 .follow_links(false)
                 .into_iter()
                 .filter_map(|e| e.ok())
             {
-                let path = entry.path();
-                if self.is_sway_file(path) {
-                    files.push(path.to_path_buf());
+                if entry.file_type().is_file() && self.is_sway_file(entry.path()) {
+                    files.push(entry.path().to_path_buf());
                 }
             }
         }
 
-        // Handle --scan-all flag
-        if self.args.scan_all {
-            let current_dir = std::env::current_dir()
-                .map_err(|e| SwayscanError::config_error(format!("Failed to get current directory: {}", e)))?;
-            
-            if self.args.verbose {
-                println!("Scanning all .sw files recursively from: {}", current_dir.display());
-            }
-
-            for entry in WalkDir::new(&current_dir)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                let path = entry.path();
-                if self.is_sway_file(path) {
-                    files.push(path.to_path_buf());
-                }
-            }
-        }
-
-        // Remove duplicates
+        // Remove duplicates and sort
         files.sort();
         files.dedup();
 
@@ -274,7 +237,7 @@ impl Scanner {
     fn is_sway_file(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("sw"))
+            .map(|ext| ext == "sw")
             .unwrap_or(false)
     }
 
@@ -282,16 +245,18 @@ impl Scanner {
         let mut parsed_files = Vec::new();
 
         for file_path in file_paths {
-            if self.args.verbose {
-                println!("Parsing: {}", file_path.display());
-            }
-
             match SwayParser::parse_file(&file_path) {
                 Ok(parsed_file) => {
+                    if self.args.verbose {
+                        println!("✅ Parsed: {}", file_path.display());
+                    }
                     parsed_files.push(parsed_file);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse {}: {}", file_path.display(), e);
+                    if self.args.verbose {
+                        eprintln!("❌ Failed to parse {}: {}", file_path.display(), e);
+                    }
+                    // Continue with other files even if one fails
                 }
             }
         }
@@ -301,162 +266,116 @@ impl Scanner {
 
     fn run_detectors(&mut self, files: Vec<SwayFile>) -> Result<Vec<Finding>, SwayscanError> {
         let mut all_findings = Vec::new();
+        let mut processed_functions = std::collections::HashSet::new();
+        let selected_detectors = self.detector_registry.get_selected_detectors(
+            &self.args.detectors,
+            &self.args.exclude_detectors,
+        );
 
-        let detectors = if self.args.should_run_all_detectors() {
             if self.args.verbose {
-                println!("Running all {} detectors", self.detector_registry.detector_count());
+            println!("Running {} detectors on {} files", selected_detectors.len(), files.len());
+            for detector in &selected_detectors {
+                println!("  - {}", detector.name());
             }
-            self.detector_registry.get_all_detectors()
-        } else {
-            if self.args.verbose {
-                println!("Running {} selected detectors", self.args.detectors.len());
-            }
-            self.detector_registry.get_selected_detectors(&self.args.detectors, &self.args.exclude_detectors)
-        };
-
-        if self.args.verbose {
-            println!("Running detectors...");
         }
 
-        for detector in detectors {
-            // Remove the individual detector running messages for cleaner output
-            for file in &files {
-                // Use advanced analyzer with comprehensive analysis
-                let mut advanced_analyzer = crate::analyzer::AdvancedAnalyzer::new();
-                let context = advanced_analyzer.build_comprehensive_analysis(file);
-                
-                match detector.analyze(file, &context) {
-                    Ok(mut findings) => {
-                        // Apply advanced false positive reduction for access control findings
-                        if detector.name() == "access_control" {
-                            findings.retain(|finding| {
-                                // Extract function name from finding description or line
-                                if let Some(func_name) = self.extract_function_name_from_finding(finding, file) {
-                                    advanced_analyzer.should_flag_access_control(&func_name)
+        for file in files {
+            if self.args.verbose {
+                println!("Analyzing: {}", file.path);
+            }
+
+            // Use AST-based analysis for each file
+            let analysis_context = self.ast_analyzer.analyze_file(&file);
+
+            for detector in &selected_detectors {
+                if detector.supports_file_type(&file.path) {
+                    match detector.analyze(&file, &analysis_context) {
+                        Ok(findings) => {
+                            // Filter findings based on confidence threshold and deduplication
+                            let filtered_findings: Vec<Finding> = findings
+                                .into_iter()
+                                .filter(|finding| {
+                                    // Check confidence threshold
+                                    if finding.confidence < self.args.confidence_threshold {
+                                        return false;
+                                    }
+                                    
+                                    // Check for duplicates across files
+                                    // Use a more specific key that includes function name, line number, and file path
+                                    let unknown = "unknown".to_string();
+                                    let function_name = finding.context.function_name.as_ref()
+                                        .unwrap_or(&unknown);
+                                    
+                                    // Create a unique key that considers multiple factors including function name
+                                    let key = format!("{}:{}:{}:{}:{}", 
+                                        function_name,
+                                        detector.name(), 
+                                        &finding.title,
+                                        finding.line,
+                                        finding.file_path
+                                    );
+                                    
+                                    if !processed_functions.contains(&key) {
+                                        processed_functions.insert(key);
+                                        true
                                 } else {
-                                    true // Keep finding if we can't determine function
+                                        false
                                 }
-                            });
+                                })
+                                .collect();
+
+                            if self.args.verbose && !filtered_findings.is_empty() {
+                                println!("  {}: Found {} issues", detector.name(), filtered_findings.len());
+                            }
+
+                            all_findings.extend(filtered_findings);
                         }
-                        all_findings.extend(findings);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Detector '{}' failed on file {}: {}",
-                            detector.name(),
-                            file.path,
-                            e
-                        );
+                        Err(e) => {
+                            if self.args.verbose {
+                                eprintln!("  ❌ {}: Error - {}", detector.name(), e);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Group findings to eliminate duplicates and show all occurrences
-        let grouped_findings = crate::detectors::group_findings(all_findings);
-        
-        // Convert back to individual findings for compatibility
-        let mut final_findings = Vec::new();
-        for group in grouped_findings {
-            if group.locations.len() == 1 {
-                // Single occurrence - convert back to regular finding
-                final_findings.push(Finding {
-                    id: group.id,
-                    detector_name: group.detector_name,
-                    severity: group.severity,
-                    category: group.category,
-                    confidence: group.confidence,
-                    title: group.title,
-                    description: group.description,
-                    file_path: group.locations[0].file_path.clone(),
-                    line: group.locations[0].line,
-                    column: group.locations[0].column,
-                    end_line: group.locations[0].end_line,
-                    end_column: group.locations[0].end_column,
-                    code_snippet: group.locations[0].code_snippet.clone(),
-                    recommendation: group.recommendation,
-                    impact: group.impact,
-                    effort: group.effort,
-                    references: group.references,
-                    cwe_ids: group.cwe_ids,
-                    owasp_category: group.owasp_category,
-                    tags: group.tags,
-                    created_at: group.created_at,
-                    fingerprint: group.fingerprint,
-                    context: group.context,
-                });
-            } else {
-                // Multiple occurrences - create one finding with all locations in description
-                let locations_desc = group.locations.iter()
-                    .map(|loc| format!("  • {}:{} - {}", 
-                        loc.file_path.split(['/', '\\']).last().unwrap_or(&loc.file_path),
-                        loc.line,
-                        loc.code_snippet.lines().next().unwrap_or("").trim()
-                    ))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                
-                let enhanced_description = format!(
-                    "{}\n\nFound in {} locations:\n{}",
-                    group.description,
-                    group.locations.len(),
-                    locations_desc
-                );
-                
-                final_findings.push(Finding {
-                    id: group.id,
-                    detector_name: group.detector_name,
-                    severity: group.severity,
-                    category: group.category,
-                    confidence: group.confidence,
-                    title: format!("{} ({} occurrences)", group.title, group.locations.len()),
-                    description: enhanced_description,
-                    file_path: group.locations[0].file_path.clone(),
-                    line: group.locations[0].line,
-                    column: group.locations[0].column,
-                    end_line: group.locations[0].end_line,
-                    end_column: group.locations[0].end_column,
-                    code_snippet: group.locations[0].code_snippet.clone(),
-                    recommendation: group.recommendation,
-                    impact: group.impact,
-                    effort: group.effort,
-                    references: group.references,
-                    cwe_ids: group.cwe_ids,
-                    owasp_category: group.owasp_category,
-                    tags: group.tags,
-                    created_at: group.created_at,
-                    fingerprint: group.fingerprint,
-                    context: group.context,
-                });
-            }
+        // Filter by severity if specified
+        if let Some(severity_filter) = &self.args.severity_filter {
+            all_findings.retain(|finding| finding.severity >= severity_filter.clone().into());
         }
-        
-        Ok(final_findings)
+
+        // Sort findings
+        all_findings.sort_by(|a, b| {
+            // Primary sort: severity (descending)
+            let severity_cmp = b.severity.cmp(&a.severity);
+            if severity_cmp != std::cmp::Ordering::Equal {
+                return severity_cmp;
+            }
+            
+            // Secondary sort: confidence (descending)
+            b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(all_findings)
     }
 
     fn extract_function_name_from_finding(&self, finding: &Finding, file: &SwayFile) -> Option<String> {
         // Extract function name from the finding's line number
         let lines: Vec<&str> = file.content.lines().collect();
-        let start_line = finding.line.saturating_sub(1);
+        let line_num = finding.line.saturating_sub(1);
         
-        // Look backwards from the finding line to find the function declaration
-        for i in (0..=start_line.min(lines.len().saturating_sub(1))).rev() {
-            if let Some(line) = lines.get(i) {
-                if let Some(start) = line.find("fn ") {
-                    let after_fn = &line[start + 3..];
-                    if let Some(end) = after_fn.find('(') {
-                        return Some(after_fn[..end].trim().to_string());
+        if line_num < lines.len() {
+            let line = lines[line_num];
+            
+            // Look for function definition patterns
+            if line.contains("fn ") {
+                // Extract function name from "fn function_name("
+                if let Some(fn_start) = line.find("fn ") {
+                    let after_fn = &line[fn_start + 3..];
+                    if let Some(paren_start) = after_fn.find('(') {
+                        return Some(after_fn[..paren_start].trim().to_string());
                     }
-                }
-            }
-        }
-        
-        // Fallback: try to extract from finding description
-        if finding.description.contains("function") {
-            // Look for quoted function names in description
-            if let Some(start) = finding.description.find('`') {
-                if let Some(end) = finding.description[start + 1..].find('`') {
-                    return Some(finding.description[start + 1..start + 1 + end].to_string());
                 }
             }
         }

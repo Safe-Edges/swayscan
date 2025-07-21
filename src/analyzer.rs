@@ -1,100 +1,210 @@
-use crate::parser::SwayFile;
+use crate::parser::{SwayFile, SwayAst, SwayFunction, SwayStatement, SwayExpression, SwayStorageField, 
+                   SwayParameter, SwayType, StatementKind, ExpressionKind, FunctionVisibility, Span};
 use crate::detectors::AnalysisContext;
 use std::collections::{HashMap, HashSet};
-use regex::Regex;
-use once_cell::sync::Lazy;
 
-static FUNCTION_CALL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        // Direct function calls
-        Regex::new(r"(\w+)\s*\(").unwrap(),
-        // Method calls  
-        Regex::new(r"\.(\w+)\s*\(").unwrap(),
-        // Storage calls
-        Regex::new(r"storage\.(\w+)\.(\w+)\s*\(").unwrap(),
-    ]
-});
+/// AST-based analyzer for Sway smart contracts
+pub struct SwayAstAnalyzer {
+    pub function_call_graph: FunctionCallGraph,
+    pub storage_analysis: StorageAnalysis,
+    pub control_flow_analysis: ControlFlowAnalysis,
+    pub security_analysis: SecurityAnalysis,
+}
 
-static ACCESS_CONTROL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        // Direct require statements
-        Regex::new(r"require\s*\(\s*([^)]+)\s*,\s*[^)]*\)").unwrap(),
-        // Assert statements
-        Regex::new(r"assert\s*\(\s*([^)]+)\s*\)").unwrap(),
-        // Owner checks
-        Regex::new(r"msg_sender\(\)\s*==\s*storage\.(\w+)").unwrap(),
-        // Role checks
-        Regex::new(r"has_role\s*\(\s*([^,)]+)").unwrap(),
-        // Custom access control functions
-        Regex::new(r"only_(\w+)\s*\(\s*\)").unwrap(),
-    ]
-});
+/// Function Call Graph - Maps callers and callees with AST context
+#[derive(Debug, Clone)]
+pub struct FunctionCallGraph {
+    pub functions: HashMap<String, SwayFunction>,
+    pub call_relationships: HashMap<String, Vec<String>>, // caller -> callees
+    pub reverse_calls: HashMap<String, Vec<String>>,     // callee -> callers
+    pub function_spans: HashMap<String, Span>,
+}
+
+/// Storage Analysis - Tracks storage operations using AST
+#[derive(Debug, Clone)]
+pub struct StorageAnalysis {
+    pub storage_fields: HashMap<String, StorageFieldInfo>,
+    pub read_operations: HashMap<String, Vec<StorageRead>>,
+    pub write_operations: HashMap<String, Vec<StorageWrite>>,
+    pub storage_dependencies: HashMap<String, Vec<String>>,
+}
+
+/// Control Flow Analysis - Analyzes control flow using AST
+#[derive(Debug, Clone)]
+pub struct ControlFlowAnalysis {
+    pub control_flow_graph: HashMap<String, Vec<ControlFlowNode>>,
+    pub conditional_branches: HashMap<String, Vec<ConditionalBranch>>,
+    pub loop_structures: HashMap<String, Vec<LoopStructure>>,
+    pub exception_handling: HashMap<String, Vec<ExceptionHandler>>,
+}
+
+/// Security Analysis - Performs security analysis using AST
+#[derive(Debug, Clone)]
+pub struct SecurityAnalysis {
+    pub access_control_checks: HashMap<String, Vec<AccessControlCheck>>,
+    pub reentrancy_vulnerabilities: HashMap<String, Vec<ReentrancyVulnerability>>,
+    pub external_call_analysis: HashMap<String, Vec<ExternalCallAnalysis>>,
+    pub arithmetic_analysis: HashMap<String, Vec<ArithmeticAnalysis>>,
+}
 
 #[derive(Debug, Clone)]
-pub struct FunctionInfo {
+pub struct StorageFieldInfo {
     pub name: String,
-    pub line_start: usize,
-    pub line_end: usize,
-    pub parameters: Vec<String>,
-    pub calls: Vec<String>,
-    pub access_controls: Vec<AccessControl>,
+    pub type_: String,
+    pub span: Span,
     pub is_public: bool,
-    pub has_storage_write: bool,
-    pub has_external_calls: bool,
+    pub access_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct AccessControl {
-    pub condition: String,
-    pub line: usize,
-    pub protection_type: ProtectionType,
+pub struct StorageRead {
+    pub field: String,
+    pub function: String,
+    pub span: Span,
+    pub context: String,
 }
 
 #[derive(Debug, Clone)]
-pub enum ProtectionType {
+pub struct StorageWrite {
+    pub field: String,
+    pub function: String,
+    pub span: Span,
+    pub context: String,
+    pub access_control: Option<AccessControlCheck>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ControlFlowNode {
+    pub node_id: String,
+    pub statement: SwayStatement,
+    pub successors: Vec<String>,
+    pub predecessors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConditionalBranch {
+    pub condition: SwayExpression,
+    pub then_branch: Vec<SwayStatement>,
+    pub else_branch: Option<Vec<SwayStatement>>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopStructure {
+    pub loop_type: LoopType,
+    pub condition: SwayExpression,
+    pub body: Vec<SwayStatement>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum LoopType {
+    While,
+    For,
+    Loop,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExceptionHandler {
+    pub handler_type: ExceptionType,
+    pub body: Vec<SwayStatement>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExceptionType {
+    Require,
+    Assert,
+    Revert,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccessControlCheck {
+    pub check_type: AccessControlType,
+    pub condition: SwayExpression,
+    pub function: String,
+    pub span: Span,
+    pub is_effective: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum AccessControlType {
     OwnerCheck,
     RoleCheck,
-    ParameterValidation,
-    StateValidation,
+    PermissionCheck,
     Custom(String),
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionCallGraph {
-    pub functions: HashMap<String, FunctionInfo>,
-    pub call_relationships: HashMap<String, Vec<String>>, // caller -> callees
-    pub reverse_calls: HashMap<String, Vec<String>>,      // callee -> callers
-    pub protection_propagation: HashMap<String, Vec<AccessControl>>, // function -> inherited protections
+pub struct ReentrancyVulnerability {
+    pub function: String,
+    pub external_call: SwayExpression,
+    pub state_change: SwayExpression,
+    pub span: Span,
+    pub severity: ReentrancySeverity,
 }
 
 #[derive(Debug, Clone)]
-pub struct ParameterFlow {
-    pub parameter: String,
-    pub source_function: String,
-    pub target_function: String,
-    pub validation_context: Vec<String>,
+pub enum ReentrancySeverity {
+    High,
+    Medium,
+    Low,
 }
 
-pub struct AdvancedAnalyzer {
-    pub fcg: FunctionCallGraph,
-    pub parameter_flows: Vec<ParameterFlow>,
+#[derive(Debug, Clone)]
+pub struct ExternalCallAnalysis {
+    pub function: String,
+    pub call: SwayExpression,
+    pub span: Span,
+    pub is_checked: bool,
+    pub return_value_handled: bool,
 }
 
-impl AdvancedAnalyzer {
+#[derive(Debug, Clone)]
+pub struct ArithmeticAnalysis {
+    pub operation: String,
+    pub operands: Vec<SwayExpression>,
+    pub span: Span,
+    pub overflow_risk: bool,
+    pub underflow_risk: bool,
+}
+
+impl SwayAstAnalyzer {
     pub fn new() -> Self {
         Self {
-            fcg: FunctionCallGraph {
-                functions: HashMap::new(),
-                call_relationships: HashMap::new(),
-                reverse_calls: HashMap::new(),
-                protection_propagation: HashMap::new(),
-            },
-            parameter_flows: Vec::new(),
+            function_call_graph: FunctionCallGraph::new(),
+            storage_analysis: StorageAnalysis::new(),
+            control_flow_analysis: ControlFlowAnalysis::new(),
+            security_analysis: SecurityAnalysis::new(),
         }
     }
 
-    pub fn analyze_context(&self, _file: &SwayFile) -> AnalysisContext {
-        // Legacy method - keeping for compatibility
+    /// Main analysis entry point using Sway AST
+    pub fn analyze_file(&mut self, file: &SwayFile) -> AnalysisContext {
+        if let Some(ast) = &file.ast {
+            // Phase 1: Build Function Call Graph from AST
+            self.function_call_graph.build_from_ast(ast);
+            
+            // Phase 2: Analyze Storage Operations using AST
+            self.storage_analysis.analyze_from_ast(ast);
+            
+            // Phase 3: Analyze Control Flow using AST
+            self.control_flow_analysis.analyze_from_ast(ast);
+            
+            // Phase 4: Perform Security Analysis using AST
+            self.security_analysis.analyze_from_ast(ast);
+            
+            // Return enriched context
+            AnalysisContext {
+                function_name: None,
+                contract_type: Some("sway_contract".to_string()),
+                dependencies: self.extract_dependencies(ast),
+                complexity_score: Some(self.calculate_complexity(ast)),
+                call_depth: Some(self.calculate_max_call_depth()),
+                variables_in_scope: self.extract_variables_in_scope(ast),
+            }
+        } else {
+            // Fallback for files without AST
         AnalysisContext {
             function_name: None,
             contract_type: None,
@@ -102,364 +212,661 @@ impl AdvancedAnalyzer {
             complexity_score: None,
             call_depth: None,
             variables_in_scope: Vec::new(),
-        }
-    }
-
-    pub fn build_comprehensive_analysis(&mut self, file: &SwayFile) -> AnalysisContext {
-        // Step 1: Extract all functions and their metadata
-        self.extract_functions(file);
-        
-        // Step 2: Build call relationships
-        self.build_call_graph(file);
-        
-        // Step 3: Propagate access control protections
-        self.propagate_protections();
-        
-        // Step 4: Build parameter dependency graph
-        self.build_parameter_flows(file);
-        
-        // Step 5: Return enriched context
-        AnalysisContext {
-            function_name: None,
-            contract_type: Some("analyzed".to_string()),
-            dependencies: Vec::new(),
-            complexity_score: Some(self.fcg.functions.len() as u32),
-            call_depth: Some(self.calculate_max_call_depth()),
-            variables_in_scope: Vec::new(),
-        }
-    }
-
-    fn extract_functions(&mut self, file: &SwayFile) {
-        let lines: Vec<&str> = file.content.lines().collect();
-        let mut current_function: Option<String> = None;
-        let mut function_start = 0;
-        let mut brace_depth = 0;
-        
-        for (line_num, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            
-            // Detect function start
-            if let Some(func_name) = self.extract_function_name(trimmed) {
-                current_function = Some(func_name.clone());
-                function_start = line_num + 1;
-                brace_depth = 0;
-                
-                // Initialize function info
-                self.fcg.functions.insert(func_name.clone(), FunctionInfo {
-                    name: func_name,
-                    line_start: function_start,
-                    line_end: 0,
-                    parameters: self.extract_parameters(trimmed),
-                    calls: Vec::new(),
-                    access_controls: Vec::new(),
-                    is_public: trimmed.contains("pub fn") || !trimmed.contains("fn "),
-                    has_storage_write: trimmed.contains("storage(write)") || trimmed.contains("storage(read, write)"),
-                    has_external_calls: false,
-                });
-            }
-            
-            // Track brace depth
-            brace_depth += line.matches('{').count() as i32;
-            brace_depth -= line.matches('}').count() as i32;
-            
-            // Extract access controls within function
-            if let Some(ref func_name) = current_function {
-                if let Some(access_control) = self.extract_access_control(line, line_num + 1) {
-                    if let Some(func_info) = self.fcg.functions.get_mut(func_name) {
-                        func_info.access_controls.push(access_control);
-                    }
-                }
-                
-                // Extract function calls
-                let calls = self.extract_function_calls(line);
-                if let Some(func_info) = self.fcg.functions.get_mut(func_name) {
-                    func_info.calls.extend(calls);
-                    
-                    // Check for external calls
-                    if line.contains("transfer(") || line.contains("mint(") || line.contains("burn(") {
-                        func_info.has_external_calls = true;
-                    }
-                }
-            }
-            
-            // Function end detection
-            if brace_depth <= 0 && current_function.is_some() && line_num > function_start {
-                if let Some(func_name) = current_function.take() {
-                    if let Some(func_info) = self.fcg.functions.get_mut(&func_name) {
-                        func_info.line_end = line_num + 1;
-                    }
-                }
             }
         }
     }
 
-    fn extract_function_name(&self, line: &str) -> Option<String> {
-        if let Some(start) = line.find("fn ") {
-            let after_fn = &line[start + 3..];
-            if let Some(end) = after_fn.find('(') {
-                return Some(after_fn[..end].trim().to_string());
-            }
-        }
-        None
-    }
-
-    fn extract_parameters(&self, line: &str) -> Vec<String> {
-        if let Some(start) = line.find('(') {
-            if let Some(end) = line.find(')') {
-                let params_str = &line[start + 1..end];
-                return params_str
-                    .split(',')
-                    .map(|p| {
-                        // Extract parameter name (before :)
-                        if let Some(colon_pos) = p.find(':') {
-                            p[..colon_pos].trim().to_string()
-                        } else {
-                            p.trim().to_string()
-                        }
-                    })
-                    .filter(|p| !p.is_empty())
-                    .collect();
-            }
-        }
-        Vec::new()
-    }
-
-    fn extract_access_control(&self, line: &str, line_num: usize) -> Option<AccessControl> {
-        for pattern in ACCESS_CONTROL_PATTERNS.iter() {
-            if let Some(captures) = pattern.captures(line) {
-                if let Some(condition) = captures.get(1) {
-                    let protection_type = self.classify_protection(line);
-                    return Some(AccessControl {
-                        condition: condition.as_str().to_string(),
-                        line: line_num,
-                        protection_type,
-                    });
-                }
-            }
-        }
-        None
-    }
-
-    fn classify_protection(&self, line: &str) -> ProtectionType {
-        if line.contains("msg_sender") && line.contains("owner") {
-            ProtectionType::OwnerCheck
-        } else if line.contains("has_role") || line.contains("is_admin") {
-            ProtectionType::RoleCheck
-        } else if line.contains("amount") || line.contains("value") || line.contains("> 0") {
-            ProtectionType::ParameterValidation
-        } else if line.contains("storage.") {
-            ProtectionType::StateValidation
-        } else {
-            ProtectionType::Custom(line.trim().to_string())
-        }
-    }
-
-    fn extract_function_calls(&self, line: &str) -> Vec<String> {
-        let mut calls = Vec::new();
+    fn extract_dependencies(&self, ast: &SwayAst) -> Vec<String> {
+        let mut dependencies = Vec::new();
         
-        for pattern in FUNCTION_CALL_PATTERNS.iter() {
-            for captures in pattern.captures_iter(line) {
-                if let Some(func_name) = captures.get(1) {
-                    let name = func_name.as_str().to_string();
-                    // Filter out obvious non-function calls
-                    if !["if", "while", "for", "match", "let", "return"].contains(&name.as_str()) {
-                        calls.push(name);
-                    }
-                }
-            }
+        // Extract imports
+        for import in &ast.imports {
+            dependencies.push(import.module.clone());
         }
         
-        calls
+        // Extract trait dependencies
+        for trait_ in &ast.traits {
+            dependencies.push(format!("trait:{}", trait_.name));
+        }
+        
+        dependencies
     }
 
-    fn build_call_graph(&mut self, _file: &SwayFile) {
-        // Build bidirectional call relationships
-        for (caller, func_info) in &self.fcg.functions {
-            let callees = func_info.calls.clone();
-            self.fcg.call_relationships.insert(caller.clone(), callees.clone());
-            
-            // Build reverse mapping
-            for callee in callees {
-                self.fcg.reverse_calls
-                    .entry(callee)
-                    .or_insert_with(Vec::new)
-                    .push(caller.clone());
-            }
+    fn calculate_complexity(&self, ast: &SwayAst) -> u32 {
+        let mut complexity = 0;
+        
+        for function in &ast.functions {
+            complexity += self.calculate_function_complexity(function);
         }
+        
+        complexity
     }
 
-    fn propagate_protections(&mut self) {
-        // Step 1: Start with functions that have direct access controls
-        let mut protected_functions = HashSet::new();
+    fn calculate_function_complexity(&self, function: &SwayFunction) -> u32 {
+        let mut complexity = 1; // Base complexity
         
-        for (func_name, func_info) in &self.fcg.functions {
-            if !func_info.access_controls.is_empty() {
-                protected_functions.insert(func_name.clone());
-                self.fcg.protection_propagation.insert(
-                    func_name.clone(), 
-                    func_info.access_controls.clone()
-                );
-            }
+        for statement in &function.body {
+            complexity += self.calculate_statement_complexity(statement);
         }
         
-        // Step 2: Propagate protections to callees (top-down)
-        let mut changed = true;
-        while changed {
-            changed = false;
-            
-            for (caller, callees) in &self.fcg.call_relationships.clone() {
-                if let Some(caller_protections) = self.fcg.protection_propagation.get(caller).cloned() {
-                    for callee in callees {
-                        if !protected_functions.contains(callee) {
-                            // Only propagate to private functions or functions without their own protections
-                            if let Some(callee_info) = self.fcg.functions.get(callee) {
-                                if !callee_info.is_public && callee_info.access_controls.is_empty() {
-                                    self.fcg.protection_propagation.insert(
-                                        callee.clone(),
-                                        caller_protections.clone()
-                                    );
-                                    protected_functions.insert(callee.clone());
-                                    changed = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        complexity
     }
 
-    fn build_parameter_flows(&mut self, file: &SwayFile) {
-        // Track how parameters flow between functions
-        let lines: Vec<&str> = file.content.lines().collect();
-        
-        for (func_name, func_info) in &self.fcg.functions {
-            for param in &func_info.parameters {
-                // Find where this parameter is used in function calls
-                for line_num in func_info.line_start..func_info.line_end {
-                    if line_num < lines.len() {
-                        let line = lines[line_num];
-                        
-                        // If parameter is passed to another function
-                        for called_func in &func_info.calls {
-                            if line.contains(&format!("{}(", called_func)) && line.contains(param) {
-                                let validation_context = self.extract_validation_context(
-                                    &lines, 
-                                    func_info.line_start, 
-                                    line_num
-                                );
-                                
-                                self.parameter_flows.push(ParameterFlow {
-                                    parameter: param.clone(),
-                                    source_function: func_name.clone(),
-                                    target_function: called_func.clone(),
-                                    validation_context,
-                                });
-                            }
-                        }
-                    }
-                }
+    fn calculate_statement_complexity(&self, statement: &SwayStatement) -> u32 {
+        match &statement.kind {
+            StatementKind::If(_) => 2,
+            StatementKind::While(_) => 3,
+            StatementKind::For(_) => 3,
+            StatementKind::Match(_) => 2,
+            StatementKind::Block(statements) => {
+                statements.iter().map(|s| self.calculate_statement_complexity(s)).sum()
             }
+            _ => 1,
         }
-    }
-
-    fn extract_validation_context(&self, lines: &[&str], func_start: usize, current_line: usize) -> Vec<String> {
-        let mut validations = Vec::new();
-        
-        // Look for validation patterns between function start and current line
-        for i in func_start..current_line {
-            if i < lines.len() {
-                let line = lines[i];
-                if line.contains("require(") || line.contains("assert(") {
-                    validations.push(line.trim().to_string());
-                }
-            }
-        }
-        
-        validations
     }
 
     fn calculate_max_call_depth(&self) -> u32 {
         let mut max_depth = 0;
         
-        for func_name in self.fcg.functions.keys() {
-            let depth = self.calculate_call_depth_recursive(func_name, &mut HashSet::new());
+        for (function_name, _) in &self.function_call_graph.functions {
+            let depth = self.calculate_call_depth_recursive(function_name, &mut HashSet::new());
             max_depth = max_depth.max(depth);
         }
         
         max_depth
     }
 
-    fn calculate_call_depth_recursive(&self, func_name: &str, visited: &mut HashSet<String>) -> u32 {
-        if visited.contains(func_name) {
-            return 0; // Avoid infinite recursion
+    fn calculate_call_depth_recursive(&self, function_name: &str, visited: &mut HashSet<String>) -> u32 {
+        if visited.contains(function_name) {
+            return 0; // Prevent infinite recursion
         }
         
-        visited.insert(func_name.to_string());
-        let mut max_depth = 0;
+        visited.insert(function_name.to_string());
         
-        if let Some(callees) = self.fcg.call_relationships.get(func_name) {
+        if let Some(callees) = self.function_call_graph.call_relationships.get(function_name) {
+            let mut max_depth = 0;
             for callee in callees {
-                let depth = self.calculate_call_depth_recursive(callee, visited);
+                let depth = 1 + self.calculate_call_depth_recursive(callee, visited);
                 max_depth = max_depth.max(depth);
             }
+            max_depth
+        } else {
+            0
         }
-        
-        visited.remove(func_name);
-        max_depth + 1
     }
 
-    // Context Validity Checker (CVC) methods
-    pub fn is_function_protected(&self, func_name: &str) -> bool {
-        // Check direct protection
-        if let Some(func_info) = self.fcg.functions.get(func_name) {
-            if !func_info.access_controls.is_empty() {
+    fn extract_variables_in_scope(&self, ast: &SwayAst) -> Vec<String> {
+        let mut variables = Vec::new();
+        
+        for function in &ast.functions {
+            for parameter in &function.parameters {
+                variables.push(parameter.name.clone());
+            }
+        }
+        
+        variables
+    }
+
+    /// Check if a function has proper access control using AST analysis
+    pub fn has_access_control(&self, function_name: &str) -> bool {
+        // Find the function in our analyzed functions
+        if let Some(function) = self.function_call_graph.functions.get(function_name) {
+            // Check if function has require statements (access control checks)
+            if !function.require_statements.is_empty() {
                 return true;
             }
+            
+            // Check for common access control patterns in function content
+            let content = self.get_function_content(function);
+            
+            // Look for access control patterns
+            let access_control_patterns = [
+                "msg_sender().unwrap() == storage.owner.read()",
+                "msg_sender().unwrap() == storage.owner",
+                "require(msg_sender().unwrap() == storage.owner",
+                "msg_sender() == storage.owner",
+                "msg_sender().unwrap() == owner",
+                "require(msg_sender().unwrap() == owner",
+                "only_owner",
+                "only_admin",
+                "require(msg_sender().unwrap() == admin",
+                "msg_sender().unwrap() == admin",
+            ];
+            
+            for pattern in &access_control_patterns {
+                if content.contains(pattern) {
+                    return true;
+                }
+            }
         }
         
-        // Check inherited protection
-        self.fcg.protection_propagation.contains_key(func_name)
+        false
     }
 
-    pub fn get_protection_chain(&self, func_name: &str) -> Vec<String> {
-        let mut chain = Vec::new();
-        
-        if let Some(protections) = self.fcg.protection_propagation.get(func_name) {
-            for protection in protections {
-                chain.push(format!("{}:{}", protection.line, protection.condition));
-            }
-        }
-        
-        chain
+    fn get_function_content(&self, function: &SwayFunction) -> String {
+        function.content.clone()
     }
 
-    pub fn should_flag_access_control(&self, func_name: &str) -> bool {
-        // Only flag if:
-        // 1. Function has no direct access control
-        // 2. Function is public or has external calls/storage writes
-        // 3. No caller provides protection
-        
-        if let Some(func_info) = self.fcg.functions.get(func_name) {
-            // Has direct protection
-            if !func_info.access_controls.is_empty() {
-                return false;
-            }
+    /// Check for reentrancy vulnerabilities using AST analysis
+    pub fn has_reentrancy_vulnerability(&self, function_name: &str) -> bool {
+        if let Some(vulnerabilities) = self.security_analysis.reentrancy_vulnerabilities.get(function_name) {
+            !vulnerabilities.is_empty()
+        } else {
+            false
+        }
+    }
+
+    /// Check for unchecked external calls using AST analysis
+    pub fn has_unchecked_external_call(&self, function_name: &str) -> bool {
+        if let Some(calls) = self.security_analysis.external_call_analysis.get(function_name) {
+            calls.iter().any(|call| !call.is_checked)
+                        } else {
+            false
+        }
+    }
+
+    /// Get all storage operations for a function using AST analysis
+    pub fn get_storage_operations(&self, function_name: &str) -> (Vec<String>, Vec<String>) {
+        let reads = self.storage_analysis.read_operations
+            .get(function_name)
+            .map(|reads| reads.iter().map(|r| r.field.clone()).collect())
+            .unwrap_or_default();
             
-            // Private function with no risky operations
-            if !func_info.is_public && !func_info.has_external_calls && !func_info.has_storage_write {
-                return false;
-            }
+        let writes = self.storage_analysis.write_operations
+            .get(function_name)
+            .map(|writes| writes.iter().map(|w| w.field.clone()).collect())
+            .unwrap_or_default();
             
-            // Check if protected through call chain
-            if self.is_function_protected(func_name) {
-                return false;
-            }
-            
-            // Only flag risky public functions without protection
-            return func_info.is_public && (func_info.has_external_calls || func_info.has_storage_write);
+        (reads, writes)
+    }
+}
+
+impl FunctionCallGraph {
+    fn new() -> Self {
+        Self {
+            functions: HashMap::new(),
+            call_relationships: HashMap::new(),
+            reverse_calls: HashMap::new(),
+            function_spans: HashMap::new(),
+        }
+    }
+
+    fn build_from_ast(&mut self, ast: &SwayAst) {
+        // Extract all functions
+        for function in &ast.functions {
+            self.functions.insert(function.name.clone(), function.clone());
+            self.function_spans.insert(function.name.clone(), function.span.clone());
         }
         
-        true // Default to flagging if we can't analyze
+        // Build call relationships by analyzing function bodies
+        for function in &ast.functions {
+            let mut callees = Vec::new();
+            self.extract_function_calls(function, &mut callees);
+            
+            if !callees.is_empty() {
+                self.call_relationships.insert(function.name.clone(), callees.clone());
+                
+                // Build reverse calls
+                for callee in callees {
+                    self.reverse_calls.entry(callee).or_insert_with(Vec::new).push(function.name.clone());
+                }
+            }
+        }
+    }
+
+    fn extract_function_calls(&self, function: &SwayFunction, callees: &mut Vec<String>) {
+        for statement in &function.body {
+            self.extract_calls_from_statement(statement, callees);
+        }
+    }
+
+    fn extract_calls_from_statement(&self, statement: &SwayStatement, callees: &mut Vec<String>) {
+        match &statement.kind {
+            StatementKind::Expression(expr) => {
+                self.extract_calls_from_expression(expr, callees);
+            }
+            StatementKind::Block(statements) => {
+                for stmt in statements {
+                    self.extract_calls_from_statement(stmt, callees);
+                }
+            }
+            StatementKind::If(if_stmt) => {
+                for stmt in &if_stmt.then_block {
+                    self.extract_calls_from_statement(stmt, callees);
+                }
+                if let Some(else_block) = &if_stmt.else_block {
+                    for stmt in else_block {
+                        self.extract_calls_from_statement(stmt, callees);
+                    }
+                }
+            }
+            StatementKind::While(while_stmt) => {
+                for stmt in &while_stmt.body {
+                    self.extract_calls_from_statement(stmt, callees);
+                }
+            }
+            StatementKind::For(for_stmt) => {
+                for stmt in &for_stmt.body {
+                    self.extract_calls_from_statement(stmt, callees);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn extract_calls_from_expression(&self, expr: &SwayExpression, callees: &mut Vec<String>) {
+        match &expr.kind {
+            ExpressionKind::FunctionCall(call) => {
+                callees.push(call.function.clone());
+            }
+            ExpressionKind::MethodCall(call) => {
+                // Extract method calls as well
+                callees.push(format!("{}.{}", "receiver", call.method));
+            }
+            ExpressionKind::Binary(binary) => {
+                self.extract_calls_from_expression(&binary.left, callees);
+                self.extract_calls_from_expression(&binary.right, callees);
+            }
+            ExpressionKind::Unary(unary) => {
+                self.extract_calls_from_expression(&unary.operand, callees);
+            }
+            ExpressionKind::If(if_expr) => {
+                self.extract_calls_from_expression(&if_expr.then_expr, callees);
+                if let Some(else_expr) = &if_expr.else_expr {
+                    self.extract_calls_from_expression(else_expr, callees);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl StorageAnalysis {
+    fn new() -> Self {
+        Self {
+            storage_fields: HashMap::new(),
+            read_operations: HashMap::new(),
+            write_operations: HashMap::new(),
+            storage_dependencies: HashMap::new(),
+        }
+    }
+
+    fn analyze_from_ast(&mut self, ast: &SwayAst) {
+        // Extract storage fields
+        for field in &ast.storage_fields {
+            self.storage_fields.insert(field.name.clone(), StorageFieldInfo {
+                name: field.name.clone(),
+                type_: field.type_.name.clone(),
+                span: field.span.clone(),
+                is_public: false, // Would need to check visibility
+                access_patterns: Vec::new(),
+            });
+        }
+        
+        // Analyze storage operations in functions
+        for function in &ast.functions {
+            self.analyze_function_storage_operations(function);
+        }
+    }
+
+    fn analyze_function_storage_operations(&mut self, function: &SwayFunction) {
+        let mut reads = Vec::new();
+        let mut writes = Vec::new();
+        
+        for statement in &function.body {
+            self.extract_storage_operations_from_statement(statement, &mut reads, &mut writes);
+        }
+        
+        if !reads.is_empty() {
+            self.read_operations.insert(function.name.clone(), reads);
+        }
+        
+        if !writes.is_empty() {
+            self.write_operations.insert(function.name.clone(), writes);
+        }
+    }
+
+    fn extract_storage_operations_from_statement(
+        &self,
+        statement: &SwayStatement,
+        reads: &mut Vec<StorageRead>,
+        writes: &mut Vec<StorageWrite>,
+    ) {
+        match &statement.kind {
+            StatementKind::Storage(storage_stmt) => {
+                let operation = StorageRead {
+                    field: storage_stmt.field.clone(),
+                    function: "unknown".to_string(),
+                    span: statement.span.clone(),
+                    context: "storage_operation".to_string(),
+                };
+                
+                match storage_stmt.operation {
+                    crate::parser::StorageOperation::Read => {
+                        reads.push(operation);
+                    }
+                    crate::parser::StorageOperation::Write => {
+                        writes.push(StorageWrite {
+                            field: storage_stmt.field.clone(),
+                            function: "unknown".to_string(),
+                            span: statement.span.clone(),
+                            context: "storage_operation".to_string(),
+                            access_control: None,
+                        });
+                    }
+                    crate::parser::StorageOperation::Both => {
+                        reads.push(operation);
+                        writes.push(StorageWrite {
+                            field: storage_stmt.field.clone(),
+                            function: "unknown".to_string(),
+                            span: statement.span.clone(),
+                            context: "storage_operation".to_string(),
+                            access_control: None,
+                        });
+                    }
+                }
+            }
+            StatementKind::Expression(expr) => {
+                self.extract_storage_operations_from_expression(expr, reads, writes);
+            }
+            StatementKind::Block(statements) => {
+                for stmt in statements {
+                    self.extract_storage_operations_from_statement(stmt, reads, writes);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn extract_storage_operations_from_expression(
+        &self,
+        expr: &SwayExpression,
+        reads: &mut Vec<StorageRead>,
+        writes: &mut Vec<StorageWrite>,
+    ) {
+        match &expr.kind {
+            ExpressionKind::MethodCall(call) => {
+                if call.method == "read" {
+                    if let ExpressionKind::Variable(field) = &call.receiver.kind {
+                        reads.push(StorageRead {
+                            field: field.clone(),
+                            function: "unknown".to_string(),
+                            span: expr.span.clone(),
+                            context: "method_call".to_string(),
+                        });
+                    }
+                } else if call.method == "write" {
+                    if let ExpressionKind::Variable(field) = &call.receiver.kind {
+                        writes.push(StorageWrite {
+                            field: field.clone(),
+                            function: "unknown".to_string(),
+                            span: expr.span.clone(),
+                            context: "method_call".to_string(),
+                            access_control: None,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl ControlFlowAnalysis {
+    fn new() -> Self {
+        Self {
+            control_flow_graph: HashMap::new(),
+            conditional_branches: HashMap::new(),
+            loop_structures: HashMap::new(),
+            exception_handling: HashMap::new(),
+        }
+    }
+
+    fn analyze_from_ast(&mut self, ast: &SwayAst) {
+        for function in &ast.functions {
+            self.analyze_function_control_flow(function);
+        }
+    }
+
+    fn analyze_function_control_flow(&mut self, function: &SwayFunction) {
+        let mut control_flow_nodes = Vec::new();
+        let mut conditional_branches = Vec::new();
+        let mut loop_structures = Vec::new();
+        let mut exception_handlers = Vec::new();
+        
+        for statement in &function.body {
+            self.analyze_statement_control_flow(
+                statement,
+                &mut control_flow_nodes,
+                &mut conditional_branches,
+                &mut loop_structures,
+                &mut exception_handlers,
+            );
+        }
+        
+        if !control_flow_nodes.is_empty() {
+            self.control_flow_graph.insert(function.name.clone(), control_flow_nodes);
+        }
+        
+        if !conditional_branches.is_empty() {
+            self.conditional_branches.insert(function.name.clone(), conditional_branches);
+        }
+        
+        if !loop_structures.is_empty() {
+            self.loop_structures.insert(function.name.clone(), loop_structures);
+        }
+        
+        if !exception_handlers.is_empty() {
+            self.exception_handling.insert(function.name.clone(), exception_handlers);
+        }
+    }
+
+    fn analyze_statement_control_flow(
+        &self,
+        statement: &SwayStatement,
+        control_flow_nodes: &mut Vec<ControlFlowNode>,
+        conditional_branches: &mut Vec<ConditionalBranch>,
+        loop_structures: &mut Vec<LoopStructure>,
+        exception_handlers: &mut Vec<ExceptionHandler>,
+    ) {
+        match &statement.kind {
+            StatementKind::If(if_stmt) => {
+                conditional_branches.push(ConditionalBranch {
+                    condition: *if_stmt.condition.clone(),
+                    then_branch: if_stmt.then_block.clone(),
+                    else_branch: if_stmt.else_block.clone(),
+                    span: statement.span.clone(),
+                });
+            }
+            StatementKind::While(while_stmt) => {
+                loop_structures.push(LoopStructure {
+                    loop_type: LoopType::While,
+                    condition: *while_stmt.condition.clone(),
+                    body: while_stmt.body.clone(),
+                    span: statement.span.clone(),
+                });
+            }
+            StatementKind::For(for_stmt) => {
+                loop_structures.push(LoopStructure {
+                    loop_type: LoopType::For,
+                    condition: SwayExpression {
+                        kind: ExpressionKind::Variable("iterator".to_string()),
+                        span: statement.span.clone(),
+                    },
+                    body: for_stmt.body.clone(),
+                    span: statement.span.clone(),
+                });
+            }
+            StatementKind::Require(require_stmt) => {
+                exception_handlers.push(ExceptionHandler {
+                    handler_type: ExceptionType::Require,
+                    body: Vec::new(),
+                    span: statement.span.clone(),
+                });
+            }
+            StatementKind::Assert(assert_stmt) => {
+                exception_handlers.push(ExceptionHandler {
+                    handler_type: ExceptionType::Assert,
+                    body: Vec::new(),
+                    span: statement.span.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+impl SecurityAnalysis {
+    fn new() -> Self {
+        Self {
+            access_control_checks: HashMap::new(),
+            reentrancy_vulnerabilities: HashMap::new(),
+            external_call_analysis: HashMap::new(),
+            arithmetic_analysis: HashMap::new(),
+        }
+    }
+
+    fn analyze_from_ast(&mut self, ast: &SwayAst) {
+        for function in &ast.functions {
+            self.analyze_function_security(function);
+        }
+    }
+
+    fn analyze_function_security(&mut self, function: &SwayFunction) {
+        let mut access_controls = Vec::new();
+        let mut reentrancy_vulns = Vec::new();
+        let mut external_calls = Vec::new();
+        let mut arithmetic_ops = Vec::new();
+        
+        for statement in &function.body {
+            self.analyze_statement_security(
+                statement,
+                function,
+                &mut access_controls,
+                &mut reentrancy_vulns,
+                &mut external_calls,
+                &mut arithmetic_ops,
+            );
+        }
+        
+        if !access_controls.is_empty() {
+            self.access_control_checks.insert(function.name.clone(), access_controls);
+        }
+        
+        if !reentrancy_vulns.is_empty() {
+            self.reentrancy_vulnerabilities.insert(function.name.clone(), reentrancy_vulns);
+        }
+        
+        if !external_calls.is_empty() {
+            self.external_call_analysis.insert(function.name.clone(), external_calls);
+        }
+        
+        if !arithmetic_ops.is_empty() {
+            self.arithmetic_analysis.insert(function.name.clone(), arithmetic_ops);
+        }
+    }
+
+    fn analyze_statement_security(
+        &self,
+        statement: &SwayStatement,
+        function: &SwayFunction,
+        access_controls: &mut Vec<AccessControlCheck>,
+        reentrancy_vulns: &mut Vec<ReentrancyVulnerability>,
+        external_calls: &mut Vec<ExternalCallAnalysis>,
+        arithmetic_ops: &mut Vec<ArithmeticAnalysis>,
+    ) {
+        match &statement.kind {
+            StatementKind::Require(require_stmt) => {
+                access_controls.push(AccessControlCheck {
+                    check_type: AccessControlType::Custom("require".to_string()),
+                    condition: *require_stmt.condition.clone(),
+                    function: function.name.clone(),
+                    span: statement.span.clone(),
+                    is_effective: true,
+                });
+            }
+            StatementKind::Expression(expr) => {
+                self.analyze_expression_security(
+                    expr,
+                    function,
+                    access_controls,
+                    reentrancy_vulns,
+                    external_calls,
+                    arithmetic_ops,
+                );
+            }
+            StatementKind::Block(statements) => {
+                for stmt in statements {
+                    self.analyze_statement_security(
+                        stmt,
+                        function,
+                        access_controls,
+                        reentrancy_vulns,
+                        external_calls,
+                        arithmetic_ops,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn analyze_expression_security(
+        &self,
+        expr: &SwayExpression,
+        function: &SwayFunction,
+        access_controls: &mut Vec<AccessControlCheck>,
+        reentrancy_vulns: &mut Vec<ReentrancyVulnerability>,
+        external_calls: &mut Vec<ExternalCallAnalysis>,
+        arithmetic_ops: &mut Vec<ArithmeticAnalysis>,
+    ) {
+        match &expr.kind {
+            ExpressionKind::FunctionCall(call) => {
+                // Check for external calls
+                if self.is_external_call(&call.function) {
+                    external_calls.push(ExternalCallAnalysis {
+                        function: function.name.clone(),
+                        call: expr.clone(),
+                        span: expr.span.clone(),
+                        is_checked: false, // Would need deeper analysis
+                        return_value_handled: false,
+                    });
+                }
+            }
+            ExpressionKind::Binary(binary) => {
+                // Check for arithmetic operations
+                if self.is_arithmetic_operation(&binary.operator) {
+                    arithmetic_ops.push(ArithmeticAnalysis {
+                        operation: binary.operator.clone(),
+                        operands: vec![*binary.left.clone(), *binary.right.clone()],
+                        span: expr.span.clone(),
+                        overflow_risk: self.has_overflow_risk(&binary.operator),
+                        underflow_risk: self.has_underflow_risk(&binary.operator),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn is_external_call(&self, function: &str) -> bool {
+        let external_functions = [
+            "transfer", "mint", "burn", "force_transfer", "mint_to", "burn_from",
+            "call", "delegatecall", "staticcall", "create", "create2"
+        ];
+        
+        external_functions.iter().any(|&f| function.contains(f))
+    }
+
+    fn is_arithmetic_operation(&self, operator: &str) -> bool {
+        matches!(operator, "+" | "-" | "*" | "/" | "%" | "**")
+    }
+
+    fn has_overflow_risk(&self, operator: &str) -> bool {
+        matches!(operator, "+" | "*" | "**")
+    }
+
+    fn has_underflow_risk(&self, operator: &str) -> bool {
+        matches!(operator, "-")
     }
 } 

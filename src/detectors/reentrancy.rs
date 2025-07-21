@@ -1,258 +1,344 @@
-use crate::detectors::{Detector, Finding, Severity, Category, AnalysisContext, extract_code_snippet, Reference, ReferenceType, EstimatedEffort};
+use crate::detectors::{Detector, Finding, Severity, Category, AnalysisContext};
 use crate::error::SwayscanError;
-use crate::parser::SwayFile;
-use regex::Regex;
-use once_cell::sync::Lazy;
+use crate::parser::{SwayFile, SwayAst, SwayFunction, SwayStatement, SwayExpression, StatementKind, ExpressionKind};
+use crate::detectors::ast_visitor::{AstVisitor, AstFinding, SemanticAnalyzer};
+use crate::utils::{byte_offset_to_line, byte_offset_to_line_col};
 
 pub struct ReentrancyDetector;
-
-// Patterns for external calls in Sway
-static EXTERNAL_CALL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        Regex::new(r"(?m)^\s*let\s+\w+\s*=\s*abi\([^)]+\)\s*\.").unwrap(), // ABI calls
-        Regex::new(r"(?m)contract_call\s*\(").unwrap(), // Direct contract calls
-        Regex::new(r"(?m)transfer\s*\(").unwrap(), // Asset transfers
-        Regex::new(r"(?m)force_transfer_to_contract\s*\(").unwrap(), // Force transfers
-        Regex::new(r"(?m)mint_to\s*\(").unwrap(), // Minting operations
-        Regex::new(r"(?m)burn\s*\(").unwrap(), // Burn operations
-    ]
-});
-
-// Storage write patterns
-static STORAGE_WRITE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        Regex::new(r"storage\.[\w\.]+\.write\s*\(").unwrap(),
-        Regex::new(r"storage\.[\w\.]+\.insert\s*\(").unwrap(),
-        Regex::new(r"storage\.[\w\.]+\.remove\s*\(").unwrap(),
-        Regex::new(r"storage\.[\w\.]+\.push\s*\(").unwrap(),
-        Regex::new(r"storage\.[\w\.]+\.pop\s*\(").unwrap(),
-    ]
-});
-
-// State-changing function patterns
-static STATE_CHANGE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        Regex::new(r"#\[storage\(read,\s*write\)\]").unwrap(),
-        Regex::new(r"fn\s+\w+.*\{[^}]*storage\.[\w\.]+\.write").unwrap(),
-    ]
-});
-
-// Reentrancy protection patterns
-static PROTECTION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    vec![
-        Regex::new(r"nonReentrant").unwrap(),
-        Regex::new(r"reentrancy_guard").unwrap(),
-        Regex::new(r"mutex").unwrap(),
-        Regex::new(r"locked").unwrap(),
-        Regex::new(r"require\s*\(\s*![\w\.]*lock").unwrap(),
-    ]
-});
 
 impl ReentrancyDetector {
     pub fn new() -> Self {
         Self
     }
 
-    fn has_external_call(&self, content: &str) -> Vec<(usize, &str, String)> {
-        let mut calls = Vec::new();
-        let lines: Vec<&str> = content.lines().collect();
+    fn analyze_function_reentrancy(&self, function: &SwayFunction, file: &SwayFile, ast: &SwayAst) -> Option<Finding> {
+        let mut visitor = ReentrancyVisitor::new();
+        let ast_findings = visitor.visit_function(function);
         
-        for (i, line) in lines.iter().enumerate() {
-            for pattern in EXTERNAL_CALL_PATTERNS.iter() {
-                if let Some(mat) = pattern.find(line) {
-                    calls.push((i + 1, "external_call", mat.as_str().to_string()));
-                }
-            }
-        }
-        calls
-    }
-
-    fn has_storage_write_after(&self, content: &str, start_line: usize) -> Vec<(usize, String)> {
-        let mut writes = Vec::new();
-        let lines: Vec<&str> = content.lines().collect();
-        
-        // Look for storage writes in the same function after the external call
-        for (i, line) in lines.iter().enumerate().skip(start_line.saturating_sub(1)) {
-            for pattern in STORAGE_WRITE_PATTERNS.iter() {
-                if let Some(mat) = pattern.find(line) {
-                    writes.push((i + 1, mat.as_str().to_string()));
-                }
-            }
+        if !ast_findings.is_empty() {
+            let finding = &ast_findings[0]; // Take the first finding
+            let (line_number, column) = byte_offset_to_line_col(&file.content, finding.span.0);
             
-            // Stop at function boundary
-            if line.trim().starts_with("fn ") || line.trim() == "}" {
-                break;
-            }
+            Some(Finding::new(
+                "reentrancy",
+                Severity::High,
+                Category::Security,
+                0.9,
+                &format!("Reentrancy Vulnerability Detected - {} (line {}, col {})", function.name, line_number, column),
+                &finding.message,
+                &file.path,
+                line_number,
+                line_number,
+                &function.content,
+                &finding.suggestion,
+            ))
+        } else {
+            None
         }
-        writes
+    }
+}
+
+/// Advanced AST Visitor for Reentrancy Detection
+struct ReentrancyVisitor {
+    findings: Vec<AstFinding>,
+    state_changes_before_external_call: Vec<String>,
+    external_calls_before_state_change: Vec<String>,
+    has_checks_effects_interactions: bool,
+    has_reentrancy_guard: bool,
+    current_function_state_changes: Vec<String>,
+    current_function_external_calls: Vec<String>,
+}
+
+impl ReentrancyVisitor {
+    fn new() -> Self {
+        Self {
+            findings: Vec::new(),
+            state_changes_before_external_call: Vec::new(),
+            external_calls_before_state_change: Vec::new(),
+            has_checks_effects_interactions: false,
+            has_reentrancy_guard: false,
+            current_function_state_changes: Vec::new(),
+            current_function_external_calls: Vec::new(),
+        }
+    }
+}
+
+impl AstVisitor for ReentrancyVisitor {
+    fn visit_function(&mut self, function: &SwayFunction) -> Vec<AstFinding> {
+        self.findings.clear();
+        self.state_changes_before_external_call.clear();
+        self.external_calls_before_state_change.clear();
+        self.has_checks_effects_interactions = false;
+        self.has_reentrancy_guard = false;
+        self.current_function_state_changes.clear();
+        self.current_function_external_calls.clear();
+        
+        // Visit all statements in the function body
+        for statement in &function.body {
+            self.visit_statement(statement);
+        }
+        
+        // Analyze the order of operations for reentrancy vulnerabilities
+        self.analyze_reentrancy_patterns(function);
+        
+        self.findings.clone()
     }
 
-    fn has_reentrancy_protection(&self, function_content: &str) -> bool {
-        for pattern in PROTECTION_PATTERNS.iter() {
-            if pattern.is_match(function_content) {
-                return true;
-            }
-        }
-        false
+    fn visit_statement(&mut self, statement: &SwayStatement) -> Vec<AstFinding> {
+        self.visit_statement_kind(&statement.kind);
+        self.findings.clone()
     }
 
-    fn extract_function_content(&self, content: &str, line_num: usize) -> String {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut start = line_num.saturating_sub(1);
-        let mut end = line_num;
-        
-        // Find function start
-        while start > 0 {
-            if lines[start].trim().starts_with("fn ") || lines[start].trim().starts_with("pub fn ") {
-                break;
+    fn visit_expression(&mut self, expression: &SwayExpression) -> Vec<AstFinding> {
+        self.visit_expression_kind(&expression.kind);
+        self.findings.clone()
+    }
+
+    fn visit_statement_kind(&mut self, kind: &StatementKind) -> Vec<AstFinding> {
+        match kind {
+            StatementKind::Expression(expr) => {
+                self.visit_expression(expr);
             }
-            start -= 1;
-        }
-        
-        // Find function end
-        let mut brace_count = 0;
-        let mut found_opening = false;
-        for i in start..lines.len() {
-            for ch in lines[i].chars() {
-                match ch {
-                    '{' => {
-                        brace_count += 1;
-                        found_opening = true;
-                    },
-                    '}' => {
-                        brace_count -= 1;
-                        if found_opening && brace_count == 0 {
-                            end = i;
-                            return lines[start..=end].join("\n");
-                        }
-                    },
+            StatementKind::Let(let_stmt) => {
+                self.visit_expression(&let_stmt.value);
+            }
+            StatementKind::Return(expr_opt) => {
+                if let Some(expr) = expr_opt {
+                    self.visit_expression(expr);
+                }
+            }
+            StatementKind::If(if_stmt) => {
+                self.visit_expression(&if_stmt.condition);
+                
+                for stmt in &if_stmt.then_block {
+                    self.visit_statement(stmt);
+                }
+                
+                if let Some(else_block) = &if_stmt.else_block {
+                    for stmt in else_block {
+                        self.visit_statement(stmt);
+                    }
+                }
+            }
+            StatementKind::While(while_stmt) => {
+                self.visit_expression(&while_stmt.condition);
+                
+                for stmt in &while_stmt.body {
+                    self.visit_statement(stmt);
+                }
+            }
+            StatementKind::For(for_stmt) => {
+                self.visit_expression(&for_stmt.iterator);
+                
+                for stmt in &for_stmt.body {
+                    self.visit_statement(stmt);
+                }
+            }
+            StatementKind::Match(match_stmt) => {
+                self.visit_expression(&match_stmt.expression);
+                
+                for arm in &match_stmt.arms {
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expression(guard);
+                    }
+                    
+                    for stmt in &arm.body {
+                        self.visit_statement(stmt);
+                    }
+                }
+            }
+            StatementKind::Block(statements) => {
+                for stmt in statements {
+                    self.visit_statement(stmt);
+                }
+            }
+            StatementKind::Storage(storage_stmt) => {
+                // Track storage operations for reentrancy analysis
+                match storage_stmt.operation {
+                    crate::parser::StorageOperation::Write | crate::parser::StorageOperation::Both => {
+                        self.current_function_state_changes.push(storage_stmt.field.clone());
+                    }
                     _ => {}
                 }
             }
+            StatementKind::Require(require_stmt) => {
+                self.visit_expression(&require_stmt.condition);
+            }
+            StatementKind::Assert(assert_stmt) => {
+                self.visit_expression(&assert_stmt.condition);
+            }
+            StatementKind::Break | StatementKind::Continue => {}
         }
         
-        lines[start..end.min(lines.len())].join("\n")
+        self.findings.clone()
     }
 
-    fn analyze_reentrancy_risk(&self, external_calls: &[(usize, &str, String)], storage_writes: &[(usize, String)], function_content: &str) -> f64 {
-        let mut risk_score: f64 = 0.0;
-        
-        // Base risk for external call + storage write pattern
-        if !external_calls.is_empty() && !storage_writes.is_empty() {
-            risk_score += 0.6;
-        }
-        
-        // Higher risk if storage write happens after external call
-        for (call_line, _, _) in external_calls {
-            for (write_line, _) in storage_writes {
-                if write_line > call_line {
-                    risk_score += 0.3;
-                    break;
+    fn visit_expression_kind(&mut self, kind: &ExpressionKind) -> Vec<AstFinding> {
+        match kind {
+            ExpressionKind::Literal(_) => {}
+            ExpressionKind::Variable(_) => {}
+            ExpressionKind::FunctionCall(func_call) => {
+                // Check for external calls and reentrancy guards
+                if SemanticAnalyzer::is_external_call(&SwayExpression {
+                    kind: ExpressionKind::FunctionCall(func_call.clone()),
+                    span: func_call.arguments.first().map(|a| a.span.clone()).unwrap_or_default(),
+                }) {
+                    self.current_function_external_calls.push(func_call.function.clone());
                 }
+                
+                // Check for reentrancy guard patterns
+                if func_call.function == "non_reentrant" || func_call.function == "reentrancy_guard" {
+                    self.has_reentrancy_guard = true;
+                }
+                
+                // Visit all arguments
+                for arg in &func_call.arguments {
+                    self.visit_expression(arg);
+                }
+            }
+            ExpressionKind::MethodCall(method_call) => {
+                // Check for external calls and state changes
+                if SemanticAnalyzer::is_external_call(&SwayExpression {
+                    kind: ExpressionKind::MethodCall(method_call.clone()),
+                    span: method_call.arguments.first().map(|a| a.span.clone()).unwrap_or_default(),
+                }) {
+                    self.current_function_external_calls.push(format!("{}.{}", "receiver", method_call.method));
+                }
+                
+                if SemanticAnalyzer::is_state_change(&SwayExpression {
+                    kind: ExpressionKind::MethodCall(method_call.clone()),
+                    span: method_call.arguments.first().map(|a| a.span.clone()).unwrap_or_default(),
+                }) {
+                    self.current_function_state_changes.push(format!("{}.{}", "receiver", method_call.method));
+                }
+                
+                self.visit_expression(&method_call.receiver);
+                
+                for arg in &method_call.arguments {
+                    self.visit_expression(arg);
+                }
+            }
+            ExpressionKind::Binary(binary_expr) => {
+                self.visit_expression(&binary_expr.left);
+                self.visit_expression(&binary_expr.right);
+            }
+            ExpressionKind::Unary(unary_expr) => {
+                self.visit_expression(&unary_expr.operand);
+            }
+            ExpressionKind::If(if_expr) => {
+                self.visit_expression(&if_expr.condition);
+                self.visit_expression(&if_expr.then_expr);
+                
+                if let Some(else_expr) = &if_expr.else_expr {
+                    self.visit_expression(else_expr);
+                }
+            }
+            ExpressionKind::Match(match_expr) => {
+                self.visit_expression(&match_expr.expression);
+                
+                for arm in &match_expr.arms {
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expression(guard);
+                    }
+                    
+                    for stmt in &arm.body {
+                        self.visit_statement(stmt);
+                    }
+                }
+            }
+            ExpressionKind::Block(statements) => {
+                for stmt in statements {
+                    self.visit_statement(stmt);
+                }
+            }
+            ExpressionKind::Array(expressions) => {
+                for expr in expressions {
+                    self.visit_expression(expr);
+                }
+            }
+            ExpressionKind::Tuple(expressions) => {
+                for expr in expressions {
+                    self.visit_expression(expr);
+                }
+            }
+            ExpressionKind::Struct(struct_expr) => {
+                for field in &struct_expr.fields {
+                    self.visit_expression(&field.value);
+                }
+            }
+            ExpressionKind::Index(index_expr) => {
+                self.visit_expression(&index_expr.array);
+                self.visit_expression(&index_expr.index);
+            }
+            ExpressionKind::Field(field_expr) => {
+                self.visit_expression(&field_expr.receiver);
+            }
+            ExpressionKind::Parenthesized(expr) => {
+                self.visit_expression(expr);
             }
         }
         
-        // Higher risk for financial operations
-        if function_content.contains("transfer") || function_content.contains("mint") || function_content.contains("burn") {
-            risk_score += 0.2;
+        self.findings.clone()
+    }
+}
+
+impl ReentrancyVisitor {
+    /// Analyze reentrancy patterns in the function
+    fn analyze_reentrancy_patterns(&mut self, function: &SwayFunction) {
+        // Check if function has external calls and state changes
+        if !self.current_function_external_calls.is_empty() && !self.current_function_state_changes.is_empty() {
+            // Check if reentrancy guard is missing
+            if !self.has_reentrancy_guard {
+                self.findings.push(AstFinding::new(
+                    "reentrancy",
+                    "High",
+                    "Potential reentrancy vulnerability detected. External calls without reentrancy protection.",
+                    (function.span.start, function.span.end),
+                    format!("External calls: {}, State changes: {}", 
+                        self.current_function_external_calls.join(", "),
+                        self.current_function_state_changes.join(", ")
+                    ),
+                    "Implement reentrancy guards or follow checks-effects-interactions pattern."
+                ));
+            }
+            
+            // Check for proper order of operations (checks-effects-interactions)
+            if !self.has_checks_effects_interactions {
+                self.findings.push(AstFinding::new(
+                    "reentrancy",
+                    "High",
+                    "Potential reentrancy vulnerability. State changes may occur before external calls.",
+                    (function.span.start, function.span.end),
+                    "Function performs state changes and external calls without proper ordering.",
+                    "Follow checks-effects-interactions pattern: validate → update state → external call."
+                ));
+            }
         }
-        
-        // Reduce risk if protection is present
-        if self.has_reentrancy_protection(function_content) {
-            risk_score *= 0.3; // Significantly reduce if protection exists
-        }
-        
-        // Cap at 1.0
-        risk_score.min(1.0)
     }
 }
 
 impl Detector for ReentrancyDetector {
     fn name(&self) -> &'static str {
-        "reentrancy_vulnerability"
+        "reentrancy"
     }
-    
     fn description(&self) -> &'static str {
-        "Detects potential reentrancy vulnerabilities in Sway contracts where external calls are followed by state changes"
+        "Detects reentrancy vulnerabilities using advanced AST-based semantic analysis."
     }
-    
     fn category(&self) -> Category {
         Category::Security
     }
-    
     fn default_severity(&self) -> Severity {
-        Severity::Critical
+        Severity::High
     }
-    
-    fn analyze(&self, file: &SwayFile, context: &AnalysisContext) -> Result<Vec<Finding>, SwayscanError> {
+    fn analyze(&self, file: &SwayFile, _context: &AnalysisContext) -> Result<Vec<Finding>, SwayscanError> {
         let mut findings = Vec::new();
-        
-        // Find all external calls
-        let external_calls = self.has_external_call(&file.content);
-        
-        for (call_line, call_type, call_pattern) in external_calls {
-            // Extract the function containing this call
-            let function_content = self.extract_function_content(&file.content, call_line);
-            
-            // Look for storage writes after this external call
-            let storage_writes = self.has_storage_write_after(&file.content, call_line);
-            
-            if !storage_writes.is_empty() {
-                let confidence = self.analyze_reentrancy_risk(&[(call_line, call_type, call_pattern.clone())], &storage_writes, &function_content);
-                
-                // Only report if confidence is above threshold
-                if confidence >= 0.7 {
-                    let severity = if confidence >= 0.9 {
-                        Severity::Critical
-                    } else if confidence >= 0.8 {
-                        Severity::High
-                    } else {
-                        Severity::Medium
-                    };
-
-                    let storage_details: Vec<String> = storage_writes.iter()
-                        .map(|(line, pattern)| format!("Line {}: {}", line, pattern))
-                        .collect();
-
-                    let finding = Finding::new(
-                        self.name(),
-                        severity,
-                        self.category(),
-                        confidence,
-                        "Potential Reentrancy Vulnerability",
-                        &format!(
-                            "External call at line {} may allow reentrancy attack. State changes detected after external call: {}. This pattern can allow an attacker to call back into the contract before state changes are finalized.",
-                            call_line,
-                            storage_details.join(", ")
-                        ),
-                        &file.path,
-                        call_line,
-                        1,
-                        extract_code_snippet(&file.content, call_line, 3),
-                        "Implement the checks-effects-interactions pattern: (1) Perform all checks, (2) Make state changes, (3) Interact with external contracts. Consider using a reentrancy guard or mutex.",
-                    )
-                    .with_impact("Critical - Attackers can drain contract funds or manipulate state")
-                    .with_effort(EstimatedEffort::Medium)
-                    .with_cwe(vec![841, 362]) // CWE-841: Improper Enforcement of Behavioral Workflow, CWE-362: Race Condition
-                    .with_references(vec![
-                        Reference {
-                            title: "Sway Security: Reentrancy Prevention".to_string(),
-                            url: "https://docs.fuel.network/docs/sway/advanced/security/".to_string(),
-                            reference_type: ReferenceType::Documentation,
-                        },
-                        Reference {
-                            title: "SWC-107: Reentrancy".to_string(),
-                            url: "https://swcregistry.io/docs/SWC-107".to_string(),
-                            reference_type: ReferenceType::Standard,
-                        }
-                    ])
-                    .with_context(context.clone());
-                    
+        if let Some(ast) = &file.ast {
+            for function in &ast.functions {
+                if let Some(finding) = self.analyze_function_reentrancy(function, file, ast) {
                     findings.push(finding);
                 }
             }
         }
-        
         Ok(findings)
     }
 } 

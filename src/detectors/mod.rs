@@ -5,21 +5,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-// Keep only robust detector implementations
-pub mod unprotected_storage;
-pub mod reentrancy;
+// New smart Sway-specific analyzer
 pub mod access_control;
-pub mod data_validation;
-pub mod cryptographic;
+pub mod reentrancy;
+pub mod input_validation;
 pub mod business_logic;
+pub mod cryptographic;
+pub mod arbitrary_asset_transfer;
+pub mod utxo_vulnerabilities;
 pub mod price_oracle_manipulation;
 pub mod flash_loan_attacks;
-pub mod unchecked_external_calls;
-pub mod utxo_vulnerabilities;
+pub mod data_validation;
 pub mod logic_errors;
-pub mod input_validation;
+pub mod unchecked_external_calls;
+pub mod weak_prng;
+pub mod unprotected_storage;
+pub mod boolean_comparison;
 pub mod division_before_multiplication;
-pub mod arbitrary_asset_transfer;
+pub mod external_call_in_loop;
+pub mod locked_native_asset;
+pub mod missing_logs;
+pub mod smart_analyzer;
+pub mod strict_equality;
+pub mod sway_analyzer;
+pub mod unused_import;
+pub mod ast_visitor;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub enum Severity {
@@ -29,13 +39,20 @@ pub enum Severity {
     Critical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Category {
+    AccessControl,
     Security,
-    Performance,
-    Maintainability,
-    Reliability,
-    Compliance,
+    BusinessLogic,
+    Cryptographic,
+    InputValidation,
+    DataValidation,
+    LogicErrors,
+    ExternalCalls,
+    Storage,
+    Oracle,
+    FlashLoan,
+    Reentrancy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,21 +300,30 @@ impl DetectorRegistry {
             detector_metadata: HashMap::new(),
         };
         
-        // Register only robust detectors with proper implementations
-        registry.register(Box::new(unprotected_storage::UnprotectedStorageDetector::new()));
-        registry.register(Box::new(reentrancy::ReentrancyDetector::new()));
+        // Register robust detectors with proper implementations
         registry.register(Box::new(access_control::AccessControlDetector::new()));
-        registry.register(Box::new(data_validation::DataValidationDetector::new()));
-        registry.register(Box::new(cryptographic::CryptographicDetector::new()));
-        registry.register(Box::new(business_logic::BusinessLogicDetector::new()));
-        registry.register(Box::new(price_oracle_manipulation::PriceOracleDetector::new()));
-        registry.register(Box::new(flash_loan_attacks::FlashLoanDetector::new()));
-        registry.register(Box::new(unchecked_external_calls::UncheckedExternalCallDetector::new()));
-        registry.register(Box::new(utxo_vulnerabilities::UtxoVulnerabilityDetector::new()));
-        registry.register(Box::new(logic_errors::LogicErrorDetector::new()));
+        registry.register(Box::new(reentrancy::ReentrancyDetector::new()));
         registry.register(Box::new(input_validation::InputValidationDetector::new()));
-        registry.register(Box::new(division_before_multiplication::DivisionBeforeMultiplicationDetector::new()));
+        registry.register(Box::new(business_logic::BusinessLogicDetector::new()));
+        registry.register(Box::new(cryptographic::CryptographicDetector::new()));
         registry.register(Box::new(arbitrary_asset_transfer::ArbitraryAssetTransferDetector::new()));
+        registry.register(Box::new(utxo_vulnerabilities::UtxoVulnerabilitiesDetector::new()));
+        registry.register(Box::new(price_oracle_manipulation::PriceOracleManipulationDetector::new()));
+        registry.register(Box::new(flash_loan_attacks::FlashLoanDetector::new()));
+        registry.register(Box::new(data_validation::DataValidationDetector::new()));
+        registry.register(Box::new(logic_errors::LogicErrorsDetector::new()));
+        registry.register(Box::new(unchecked_external_calls::UncheckedExternalCallsDetector::new()));
+        registry.register(Box::new(weak_prng::WeakPrngDetector::new()));
+        registry.register(Box::new(unprotected_storage::UnprotectedStorageDetector::new()));
+        registry.register(Box::new(boolean_comparison::BooleanComparisonDetector::new()));
+        registry.register(Box::new(division_before_multiplication::DivisionBeforeMultiplicationDetector::new()));
+        registry.register(Box::new(external_call_in_loop::ExternalCallInLoopDetector::new()));
+        registry.register(Box::new(locked_native_asset::LockedNativeAssetDetector::new()));
+        registry.register(Box::new(missing_logs::MissingLogsDetector::new()));
+        registry.register(Box::new(smart_analyzer::SmartAnalyzerDetector::new()));
+        registry.register(Box::new(strict_equality::StrictEqualityDetector::new()));
+        registry.register(Box::new(sway_analyzer::SwayAnalyzerDetector::new()));
+        registry.register(Box::new(unused_import::UnusedImportDetector::new()));
         
         registry
     }

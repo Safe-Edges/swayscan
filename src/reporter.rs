@@ -105,14 +105,29 @@ impl Reporter {
         
         println!(); // Space after description
         
-        // Show locations simply
+        // Show each location as a separate finding with individual titles
         if finding.locations.len() == 1 {
             let loc = &finding.locations[0];
             println!("   📍 {}:{}", loc.file_path.bright_yellow(), loc.line.to_string().bright_yellow());
+            if !loc.code_snippet.is_empty() {
+                println!("      {}", loc.code_snippet.bright_white());
+            }
         } else {
             println!("   📍 {} locations:", finding.locations.len());
-            for loc in &finding.locations {
-                println!("      {}:{}", loc.file_path.bright_yellow(), loc.line.to_string().bright_yellow());
+            println!(); // Extra space before locations
+            
+            for (i, loc) in finding.locations.iter().enumerate() {
+                // Show each function as a separate sub-finding with exact line number
+                println!("   {}. {} at line {}", 
+                    (i + 1).to_string().bright_cyan(), 
+                    finding.title.white().bold(),
+                    loc.line.to_string().bright_yellow()
+                );
+                println!("      📍 {}:{}", loc.file_path.bright_yellow(), loc.line.to_string().bright_yellow());
+                if !loc.code_snippet.is_empty() {
+                    println!("      Code: {}", loc.code_snippet.bright_white());
+                }
+                println!(); // Space between each location
             }
         }
 

@@ -2,34 +2,39 @@ use crate::detectors::{Detector, Finding, Severity, Category, AnalysisContext};
 use crate::error::SwayscanError;
 use crate::parser::{SwayFile, SwayAst, SwayFunction};
 
-pub struct SmartAnalyzerDetector;
+pub struct SwayAnalyzerDetector;
 
-impl SmartAnalyzerDetector {
+impl SwayAnalyzerDetector {
     pub fn new() -> Self {
         Self
     }
 
-    fn analyze_function_smart_analyzer(&self, function: &SwayFunction, file: &SwayFile, ast: &SwayAst) -> Option<Finding> {
-        // Only detect smart analyzer-specific issues, not other specific detectors
+    fn analyze_function_sway_analyzer(&self, function: &SwayFunction, file: &SwayFile, ast: &SwayAst) -> Option<Finding> {
+        // Only detect sway analyzer-specific issues, not other specific detectors
         let mut found = false;
         let mut line_number = function.span.start;
-        let mut has_complex_logic = false;
+        let mut has_sway_specific_patterns = false;
+        let mut has_unsafe_patterns = false;
         let mut has_validation = false;
         let mut has_access_control = false;
-        let mut has_error_handling = false;
-        let mut logic_lines = Vec::new();
+        let mut pattern_lines = Vec::new();
         let lines: Vec<&str> = function.content.lines().collect();
         
         for (idx, line) in lines.iter().enumerate() {
             let l = line.trim();
             
-            // Check for complex business logic
-            if l.contains("if") && l.contains("else") || l.contains("match") || l.contains("loop") {
-                has_complex_logic = true;
-                logic_lines.push(idx + line_number);
+            // Check for Sway-specific patterns
+            if l.contains("storage.") || l.contains("msg_sender()") || l.contains("transfer") {
+                has_sway_specific_patterns = true;
+                pattern_lines.push(idx + line_number);
             }
             
-            // Check for input validation
+            // Check for unsafe patterns
+            if l.contains("unwrap()") || l.contains("expect(") || l.contains("panic!") {
+                has_unsafe_patterns = true;
+            }
+            
+            // Check for validation
             if l.contains("require") || l.contains("assert") || l.contains("validate") {
                 has_validation = true;
             }
@@ -39,13 +44,8 @@ impl SmartAnalyzerDetector {
                 has_access_control = true;
             }
             
-            // Check for error handling
-            if l.contains("revert") || l.contains("panic") || l.contains("error") {
-                has_error_handling = true;
-            }
-            
-            // Check for potential issues in complex logic
-            if has_complex_logic && !has_validation && !has_access_control {
+            // Check for potential issues
+            if has_sway_specific_patterns && has_unsafe_patterns && (!has_validation || !has_access_control) {
                 found = true;
             }
         }
@@ -59,33 +59,33 @@ impl SmartAnalyzerDetector {
             }
         }
         
-        if found && has_complex_logic && (!has_validation || !has_access_control || !has_error_handling || called_by_public) {
-            let mut description = format!("Function '{}' contains complex logic without proper safeguards.", function.name);
+        if found && has_sway_specific_patterns && (has_unsafe_patterns || called_by_public) {
+            let mut description = format!("Function '{}' contains Sway-specific patterns with potential issues.", function.name);
+            if has_unsafe_patterns {
+                description.push_str(" Unsafe patterns detected.");
+            }
             if !has_validation {
-                description.push_str(" No input validation detected.");
+                description.push_str(" No validation detected.");
             }
             if !has_access_control {
                 description.push_str(" No access control detected.");
-            }
-            if !has_error_handling {
-                description.push_str(" No error handling detected.");
             }
             if called_by_public {
                 description.push_str(" This function is reachable from a public function.");
             }
             
             Some(Finding::new(
-                "smart_analyzer",
+                "sway_analyzer",
                 Severity::Medium,
                 Category::Security,
                 0.6,
-                &format!("Smart Analyzer Issue Detected - {}", function.name),
+                &format!("Sway Analyzer Issue Detected - {}", function.name),
                 &description,
                 &file.path,
                 line_number,
                 line_number,
                 &function.content,
-                "Add proper validation, access control, and error handling for complex logic.",
+                "Add proper validation, access control, and safe error handling for Sway-specific operations.",
             ))
         } else {
             None
@@ -93,12 +93,12 @@ impl SmartAnalyzerDetector {
     }
 }
 
-impl Detector for SmartAnalyzerDetector {
+impl Detector for SwayAnalyzerDetector {
     fn name(&self) -> &'static str {
-        "smart_analyzer"
+        "sway_analyzer"
     }
     fn description(&self) -> &'static str {
-        "Analyzes complex logic for potential security issues using advanced AST-based analysis."
+        "Analyzes Sway-specific patterns for potential security issues using advanced AST-based analysis."
     }
     fn category(&self) -> Category {
         Category::Security
@@ -110,7 +110,7 @@ impl Detector for SmartAnalyzerDetector {
         let mut findings = Vec::new();
         if let Some(ast) = &file.ast {
             for function in &ast.functions {
-                if let Some(finding) = self.analyze_function_smart_analyzer(function, file, ast) {
+                if let Some(finding) = self.analyze_function_sway_analyzer(function, file, ast) {
                     findings.push(finding);
                 }
             }

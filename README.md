@@ -5,20 +5,37 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://github.com/Safe-Edges/swayscan/workflows/CI/badge.svg)](https://github.com/Safe-Edges/swayscan/actions)
 
-**Advanced security scanner for Sway smart contracts with comprehensive vulnerability detection and minimal false positives.**
+**Advanced AST-based security scanner for Sway smart contracts with comprehensive vulnerability detection and minimal false positives.**
 
-SwayScanner performs deep static analysis on Sway smart contracts to identify security vulnerabilities, code quality issues, and best practice violations. Built by the **Safe Edges Team** to secure the decentralized future.
+SwayScanner performs deep **AST-based static analysis** on Sway smart contracts to identify security vulnerabilities, code quality issues, and best practice violations. Built by the **Safe Edges Team** to secure the decentralized future.
 
 ## 🚀 Features
 
+- **AST-Based Analysis**: Uses Sway language AST for accurate parsing and analysis
 - **Comprehensive Security Analysis**: Detects 14+ categories of vulnerabilities including reentrancy, access control issues, oracle manipulation, and more
 - **Professional Reports**: Export findings as beautifully formatted Markdown or PDF audit reports
 - **Forc Plugin Support**: Seamlessly integrates with Forc workflow (`forc swayscan`)
-- **Minimal False Positives**: Advanced analysis techniques reduce noise and focus on real issues
+- **Minimal False Positives**: Advanced AST analysis techniques reduce noise and focus on real issues
 - **Grouped Findings**: Similar issues are intelligently grouped for better readability
 - **Colored Output**: Professional terminal output with severity-based color coding
 - **Multiple Output Formats**: Text, JSON, SARIF, CSV, and Markdown support
 - **Safe Edges Branding**: Professional audit reports with Safe Edges branding
+
+## 🔧 Technical Architecture
+
+### AST-Based Analysis Engine
+- **Sway AST Parser**: Uses official Sway language AST for accurate code understanding
+- **Function Call Graph**: Maps function relationships and call chains
+- **Storage Analysis**: Tracks storage read/write operations
+- **Control Flow Analysis**: Analyzes conditional branches and loops
+- **Security Analysis**: Performs vulnerability detection using AST patterns
+
+### Key Components
+- **SwayAstAnalyzer**: Main analysis engine using Sway AST
+- **FunctionCallGraph**: Maps caller-callee relationships
+- **StorageAnalysis**: Tracks storage operations and dependencies
+- **ControlFlowAnalysis**: Analyzes program flow and control structures
+- **SecurityAnalysis**: Detects security vulnerabilities using AST patterns
 
 ## 📦 Installation
 
@@ -50,7 +67,7 @@ cargo install --path .
 ### Basic Usage
 
 ```bash
-# Scan a single file
+# Scan a single file with AST-based analysis
 swayscan contract.sw
 
 # Scan entire Forc project
@@ -86,7 +103,7 @@ swayscan contract.sw --exclude-detectors magic_number
 # Filter by severity
 swayscan contract.sw --severity-filter high
 
-# Verbose output with detailed analysis
+# Verbose output with detailed AST analysis
 swayscan contract.sw --verbose
 
 # Set confidence threshold
@@ -101,7 +118,7 @@ When using as a Forc plugin, SwayScanner automatically detects your project stru
 # Navigate to any Forc project
 cd my-sway-project
 
-# Run security analysis
+# Run AST-based security analysis
 forc swayscan
 
 # Generate audit report
@@ -113,16 +130,16 @@ forc swayscan --severity-filter high --fail-on high
 
 ## 🛡️ Vulnerability Detection
 
-SwayScanner detects the following vulnerability categories:
+SwayScanner uses AST-based analysis to detect the following vulnerability categories:
 
 ### Critical & High Severity
-- **Access Control**: Missing or inadequate permission checks
-- **Reentrancy**: Vulnerable external call patterns
-- **Arithmetic Issues**: Integer overflow/underflow and division errors
-- **Business Logic**: Complex logic flaws and validation issues
+- **Access Control**: Missing or inadequate permission checks using AST function analysis
+- **Reentrancy**: Vulnerable external call patterns detected through AST call graphs
+- **Arithmetic Issues**: Integer overflow/underflow and division errors using AST expression analysis
+- **Business Logic**: Complex logic flaws and validation issues through AST control flow analysis
 - **Price Oracle Manipulation**: Single oracle dependencies and flash loan vulnerabilities
-- **Flash Loan Attacks**: Atomic transaction exploits
-- **External Call Safety**: Unchecked external calls and return values
+- **Flash Loan Attacks**: Atomic transaction exploits detected via AST
+- **External Call Safety**: Unchecked external calls and return values using AST call analysis
 - **UTXO Vulnerabilities**: Fuel-specific UTXO model security issues
 
 ### Medium Severity
@@ -146,29 +163,29 @@ SwayScanner detects the following vulnerability categories:
     ███████║╚███╔███╔╝██║  ██║   ██║   ███████║╚██████╗██║  ██║██║ ╚████║
     ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝
 
-        Comprehensive Security Analysis for Sway Smart Contracts
+        AST-Based Security Analysis for Sway Smart Contracts
                            Powered by Safe Edges
                           https://safeedges.in
 ================================================================================
 
-Running detectors... (14 active)
+Running AST-based detectors... (14 active)
 
 SECURITY AUDIT REPORT
 ===========================================
 
 CRITICAL: access_control
 ├─ Missing access control in admin_mint function
-├─ Location: contract.sw:45:5
+├─ Location: contract.sw:45:5 (AST span: 45:5-67:8)
 └─ Risk: Unauthorized users can mint tokens
 
 HIGH: reentrancy  
 ├─ Potential reentrancy in unsafe_withdraw function
-├─ Location: contract.sw:67:5
+├─ Location: contract.sw:67:5 (AST span: 67:5-89:12)
 └─ Risk: Attacker can drain contract funds
 
 MEDIUM: input_validation
 ├─ Missing input validation in transfer function  
-├─ Location: contract.sw:23:5
+├─ Location: contract.sw:23:5 (AST span: 23:5-45:10)
 └─ Risk: Invalid parameters may cause unexpected behavior
 ```
 
@@ -189,6 +206,7 @@ Create a `swayscan.toml` configuration file for custom settings:
 [analysis]
 confidence_threshold = 0.7
 parallel_threads = 4
+ast_analysis = true
 
 [detectors]
 enabled = ["access_control", "reentrancy", "arithmetic_issues"]

@@ -38,6 +38,7 @@ fn vulnerable_mint(to: Address, amount: u64) {
 #[storage(read, write)]
 fn secure_owner_mint(to: Address, amount: u64) {
     // SECURE: Owner check
+     require()
     let sender = msg_sender().unwrap().as_address().unwrap();
     require(sender == storage.owner.read(), "Only owner can mint");
     

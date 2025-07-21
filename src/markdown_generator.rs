@@ -48,7 +48,7 @@ impl MarkdownGenerator {
         let total_issues = findings.len();
         let date = chrono::Utc::now().format("%B %d, %Y").to_string();
         
-        format!(r#"#  Security Audit Report
+        format!(r#"# 🛡️ Security Audit Report
 
 ## 📋 Project Information
 
@@ -66,7 +66,7 @@ impl MarkdownGenerator {
     }
 
     fn generate_executive_summary(&self, findings: &[Finding]) -> String {
-        let mut summary = String::from("##  Executive Summary\n\n");
+        let mut summary = String::from("## 📊 Executive Summary\n\n");
         
         let critical_count = findings.iter().filter(|f| matches!(f.severity, Severity::Critical)).count();
         let high_count = findings.iter().filter(|f| matches!(f.severity, Severity::High)).count();
@@ -74,11 +74,11 @@ impl MarkdownGenerator {
         let low_count = findings.iter().filter(|f| matches!(f.severity, Severity::Low)).count();
         
         if critical_count > 0 || high_count > 0 {
-            summary.push_str("**CRITICAL ATTENTION REQUIRED** - High or Critical severity vulnerabilities detected.\n\n");
+            summary.push_str("⚠️ **CRITICAL ATTENTION REQUIRED** - High or Critical severity vulnerabilities detected.\n\n");
         } else if medium_count > 0 {
-            summary.push_str("**MODERATE RISK** - Medium severity issues require attention.\n\n");
+            summary.push_str("⚡ **MODERATE RISK** - Medium severity issues require attention.\n\n");
         } else {
-            summary.push_str("**LOW RISK** - Only low-severity issues detected.\n\n");
+            summary.push_str("✅ **LOW RISK** - Only low-severity issues detected.\n\n");
         }
         
         summary.push_str("### Risk Level Distribution\n\n");
@@ -86,16 +86,16 @@ impl MarkdownGenerator {
         summary.push_str("|----------|-------|------------|\n");
         
         if critical_count > 0 {
-            summary.push_str(&format!("|  **Critical** | {} | Immediate action required |\n", critical_count));
+            summary.push_str(&format!("| 🔴 **Critical** | {} | Immediate action required |\n", critical_count));
         }
         if high_count > 0 {
-            summary.push_str(&format!("|  **High** | {} | Priority fix needed |\n", high_count));
+            summary.push_str(&format!("| 🟠 **High** | {} | Priority fix needed |\n", high_count));
         }
         if medium_count > 0 {
-            summary.push_str(&format!("|  **Medium** | {} | Should be addressed |\n", medium_count));
+            summary.push_str(&format!("| 🟡 **Medium** | {} | Should be addressed |\n", medium_count));
         }
         if low_count > 0 {
-            summary.push_str(&format!("|  **Low** | {} | Minor improvements |\n", low_count));
+            summary.push_str(&format!("| 🟢 **Low** | {} | Minor improvements |\n", low_count));
         }
         
         summary.push_str("\n---\n\n");
@@ -103,7 +103,7 @@ impl MarkdownGenerator {
     }
 
     fn generate_statistics(&self, findings: &[Finding]) -> String {
-        let mut stats = String::from("##  Analysis Statistics\n\n");
+        let mut stats = String::from("## 📈 Analysis Statistics\n\n");
         
         // Group by detector
         let mut detector_count: HashMap<String, usize> = HashMap::new();
@@ -125,11 +125,18 @@ impl MarkdownGenerator {
         for (category, count) in category_count.iter() {
             let percentage = ((*count as f64) / total * 100.0).round() as u32;
             let icon = match category {
-                Category::Security => "-",
-                Category::Performance => "-",
-                Category::Maintainability => "-",
-                Category::Reliability => "-",
-                Category::Compliance => "-",
+                Category::AccessControl => "🔒",
+                Category::Security => "🛡️",
+                Category::BusinessLogic => "💼",
+                Category::Cryptographic => "🔐",
+                Category::InputValidation => "✅",
+                Category::DataValidation => "📊",
+                Category::LogicErrors => "🧠",
+                Category::ExternalCalls => "📞",
+                Category::Storage => "💾",
+                Category::Oracle => "🔮",
+                Category::FlashLoan => "⚡",
+                Category::Reentrancy => "🔄",
             };
             stats.push_str(&format!("| {} {} | {} | {}% |\n", 
                 icon, format!("{:?}", category), count, percentage));
@@ -164,15 +171,15 @@ impl MarkdownGenerator {
                 continue;
             }
             
-                    let (icon, color) = match severity {
-            Severity::Critical => ("", "Critical"),
-            Severity::High => ("", "High"),
-            Severity::Medium => ("", "Medium"),
-            Severity::Low => ("", "Low"),
-        };
-        
-        content.push_str(&format!("### {} Severity ({} issues)\n\n", 
-            color, severity_findings.len()));
+            let (icon, color) = match severity {
+                Severity::Critical => ("🔴", "Critical"),
+                Severity::High => ("🟠", "High"),
+                Severity::Medium => ("🟡", "Medium"),
+                Severity::Low => ("🟢", "Low"),
+            };
+            
+            content.push_str(&format!("### {} {} Severity ({} issues)\n\n", 
+                icon, color, severity_findings.len()));
             
             for finding in severity_findings.iter().take(10) { // Limit to first 10
                 let file_name = finding.file_path.split(['/', '\\']).last().unwrap_or(&finding.file_path);
@@ -198,15 +205,15 @@ impl MarkdownGenerator {
         
         for (index, finding) in findings.iter().enumerate() {
             let (icon, _) = match finding.severity {
-                Severity::Critical => ("", "Critical"),
-                Severity::High => ("", "High"),
-                Severity::Medium => ("", "Medium"),
-                Severity::Low => ("", "Low"),
+                Severity::Critical => ("🔴", "Critical"),
+                Severity::High => ("🟠", "High"),
+                Severity::Medium => ("🟡", "Medium"),
+                Severity::Low => ("🟢", "Low"),
             };
             
             let file_name = finding.file_path.split(['/', '\\']).last().unwrap_or(&finding.file_path);
             
-            content.push_str(&format!("### {}\n\n", finding.title));
+            content.push_str(&format!("### {} {}\n\n", icon, finding.title));
             content.push_str(&format!("**Severity:** {:?} | **Category:** {:?} | **Confidence:** {:.1}%\n\n", 
                 finding.severity, finding.category, finding.confidence * 100.0));
             content.push_str(&format!("**Location:** `{}:{}:{}`\n\n", file_name, finding.line, finding.column));
@@ -245,11 +252,11 @@ impl MarkdownGenerator {
         content.push_str("### Immediate Actions\n\n");
         
         if critical_count > 0 {
-            content.push_str("**URGENT:** Address all Critical severity issues immediately before deployment.\n\n");
+            content.push_str("🚨 **URGENT:** Address all Critical severity issues immediately before deployment.\n\n");
         }
         
         if high_count > 0 {
-            content.push_str("**HIGH PRIORITY:** Resolve High severity vulnerabilities as soon as possible.\n\n");
+            content.push_str("🔥 **HIGH PRIORITY:** Resolve High severity vulnerabilities as soon as possible.\n\n");
         }
         
         content.push_str("### Security Best Practices\n\n");
@@ -273,7 +280,7 @@ impl MarkdownGenerator {
     fn generate_footer(&self) -> String {
         let date = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
         
-        format!(r#"##  Contact Information
+        format!(r#"## 📞 Contact Information
 
 **Safe Edges Security**
 - Website: [safeedges.in](https://safeedges.in)
@@ -284,7 +291,7 @@ impl MarkdownGenerator {
 
 *This report was generated by SwayScanner v{} on {}*
 
-**Disclaimer:** This audit report is provided for informational purposes only and does not guarantee the security of the audited smart contract. The Automated Scanner is not a substitute for professional security audits and should not be relied upon as a sole source of security. The final responsibility for security lies with the development team.
+**Disclaimer:** This audit report is provided for informational purposes only and does not guarantee the security of the audited smart contract. The auditors have made every effort to identify potential vulnerabilities, but cannot guarantee that all issues have been found. The final responsibility for security lies with the development team.
 "#, env!("CARGO_PKG_VERSION"), date)
     }
 } 
