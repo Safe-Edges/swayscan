@@ -1,6 +1,6 @@
 [package]
 name = "swayscan"
-version = "0.2.0"
+version = "0.2.8"
 edition = "2021"
 authors = ["Safe Edges Team <info@safeedges.in>"]
 description = "Advanced security scanner for Sway smart contracts with comprehensive vulnerability detection and minimal false positives"
