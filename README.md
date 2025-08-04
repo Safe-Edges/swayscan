@@ -70,10 +70,11 @@ cargo install --path .
 # Scan a single file with AST-based analysis
 swayscan contract.sw
 
-# Scan entire Forc project
-forc swayscan
+swayscan contract.sw -d path
 
 # Scan with Markdown report (recommended)
+swayscan contract.sw -o name.md
+
 swayscan contract.sw --export-md
 
 # Scan all Sway files recursively  
