@@ -10,55 +10,154 @@ impl UnprotectedStorageDetector {
     }
 
     fn analyze_function_unprotected_storage(&self, function: &SwayFunction, file: &SwayFile, ast: &SwayAst) -> Option<Finding> {
-        // Only detect unprotected storage-specific issues, not access control, business logic, or other detectors
-        let mut found = false;
-        let mut line_number = function.span.start;
-        let mut has_storage_write = false;
-        let mut has_access_control = false;
-        let mut storage_lines = Vec::new();
-        let lines: Vec<&str> = function.content.lines().collect();
-        for (idx, line) in lines.iter().enumerate() {
-            let l = line.trim();
-            if l.contains("storage.") && l.contains(".write(") {
-                has_storage_write = true;
-                storage_lines.push(idx + line_number);
-            }
-            if l.contains("require(") || l.contains("assert(") || l.contains("only_owner(") || l.contains("has_role(") {
-                has_access_control = true;
+        use crate::parser::{StatementKind, ExpressionKind, SwayStatement, SwayExpression};
+        struct StorageState {
+            has_storage_write: bool,
+            has_access_control: bool,
+            storage_write_details: Vec<String>,
+            access_control_details: Vec<String>,
+        }
+        fn walk_for_storage_checks(stmts: &[SwayStatement], state: &mut StorageState) {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StatementKind::Storage(storage_stmt) => {
+                        if storage_stmt.operation == crate::parser::StorageOperation::Write || storage_stmt.operation == crate::parser::StorageOperation::Both {
+                            state.has_storage_write = true;
+                            state.storage_write_details.push(storage_stmt.field.clone());
+                        }
+                    }
+                    StatementKind::Expression(expr) => {
+                        walk_expr_for_storage_checks(expr, state);
+                    }
+                    StatementKind::Require(_) | StatementKind::Assert(_) => {
+                        state.has_access_control = true;
+                        state.access_control_details.push("require/assert".to_string());
+                    }
+                    StatementKind::If(if_stmt) => {
+                        walk_for_storage_checks(&if_stmt.then_block, state);
+                        if let Some(else_block) = &if_stmt.else_block {
+                            walk_for_storage_checks(else_block, state);
+                        }
+                    }
+                    StatementKind::While(while_stmt) => walk_for_storage_checks(&while_stmt.body, state),
+                    StatementKind::For(for_stmt) => walk_for_storage_checks(&for_stmt.body, state),
+                    StatementKind::Match(match_stmt) => {
+                        for arm in &match_stmt.arms {
+                            walk_for_storage_checks(&arm.body, state);
+                        }
+                    }
+                    StatementKind::Block(stmts) => walk_for_storage_checks(stmts, state),
+                    _ => {}
+                }
             }
         }
-        // Inter-function: check if this function is called by another public function
-        let mut called_by_public = false;
-        for f in &ast.functions {
-            if f.name != function.name && f.content.contains(&function.name) && matches!(f.visibility, crate::parser::FunctionVisibility::Public) {
-                called_by_public = true;
-                break;
+        fn walk_expr_for_storage_checks(expr: &SwayExpression, state: &mut StorageState) {
+            use ExpressionKind::*;
+            match &expr.kind {
+                FunctionCall(call) => {
+                    let func = call.function.as_str();
+                    // Check for access control patterns
+                    if ["require", "assert", "only_owner", "has_role", "check_access", "validate_access"].contains(&func) {
+                        state.has_access_control = true;
+                        state.access_control_details.push(func.to_string());
+                    }
+                    // Check for storage write patterns
+                    if func.contains("write") || func.contains("insert") || func.contains("set") {
+                        state.has_storage_write = true;
+                        state.storage_write_details.push(func.to_string());
+                    }
+                    for arg in &call.arguments {
+                        walk_expr_for_storage_checks(arg, state);
+                    }
+                }
+                MethodCall(mc) => {
+                    let method = mc.method.as_str();
+                    // Check for storage write methods
+                    if ["write", "insert", "set", "update"].contains(&method) {
+                        state.has_storage_write = true;
+                        state.storage_write_details.push(format!("{}.{}", "receiver", method));
+                    }
+                    // Check for access control methods
+                    if ["only_owner", "has_role", "check_access"].contains(&method) {
+                        state.has_access_control = true;
+                        state.access_control_details.push(format!("{}.{}", "receiver", method));
+                    }
+                    walk_expr_for_storage_checks(&mc.receiver, state);
+                    for arg in &mc.arguments {
+                        walk_expr_for_storage_checks(arg, state);
+                    }
+                }
+                Binary(bin) => {
+                    walk_expr_for_storage_checks(&bin.left, state);
+                    walk_expr_for_storage_checks(&bin.right, state);
+                }
+                Unary(u) => walk_expr_for_storage_checks(&u.operand, state),
+                If(if_expr) => {
+                    walk_expr_for_storage_checks(&if_expr.condition, state);
+                    walk_expr_for_storage_checks(&if_expr.then_expr, state);
+                    if let Some(else_expr) = &if_expr.else_expr {
+                        walk_expr_for_storage_checks(else_expr, state);
+                    }
+                }
+                Match(match_expr) => {
+                    walk_expr_for_storage_checks(&match_expr.expression, state);
+                    for arm in &match_expr.arms {
+                        for stmt in &arm.body {
+                            if let StatementKind::Expression(e) = &stmt.kind {
+                                walk_expr_for_storage_checks(e, state);
+                            }
+                        }
+                    }
+                }
+                Block(stmts) => walk_for_storage_checks(stmts, state),
+                Array(arr) | Tuple(arr) => {
+                    for e in arr {
+                        walk_expr_for_storage_checks(e, state);
+                    }
+                }
+                Struct(se) => {
+                    for f in &se.fields {
+                        walk_expr_for_storage_checks(&f.value, state);
+                    }
+                }
+                Index(idx) => {
+                    walk_expr_for_storage_checks(&idx.array, state);
+                    walk_expr_for_storage_checks(&idx.index, state);
+                }
+                Field(fe) => walk_expr_for_storage_checks(&fe.receiver, state),
+                Parenthesized(e) => walk_expr_for_storage_checks(e, state),
+                _ => {}
             }
         }
-        if has_storage_write && (!has_access_control || called_by_public) {
-            let mut description = format!("Function '{}' modifies storage without proper access control.", function.name);
-            if !has_access_control {
-                description.push_str(" No access control detected.");
-            }
-            if called_by_public {
-                description.push_str(" This function is reachable from a public function.");
-            }
-            Some(Finding::new(
+        let mut state = StorageState {
+            has_storage_write: false,
+            has_access_control: false,
+            storage_write_details: Vec::new(),
+            access_control_details: Vec::new(),
+        };
+        walk_for_storage_checks(&function.body, &mut state);
+        // Only flag if storage write is performed without access control
+        if state.has_storage_write && !state.has_access_control {
+            let description = format!(
+                "Function '{}' modifies storage without proper access control. Storage operations: {}. No access control detected.",
+                function.name,
+                state.storage_write_details.join(", ")
+            );
+            return Some(Finding::new(
                 "unprotected_storage_variable",
                 Severity::High,
                 Category::Storage,
-                0.8,
+                0.9,
                 &format!("Unprotected Storage Modification Detected - {}", function.name),
                 &description,
                 &file.path,
-                line_number,
-                line_number,
+                function.span.start,
+                function.span.start,
                 &function.content,
-                "Add access control checks before modifying storage variables.",
-            ))
-        } else {
-            None
+                "Add access control checks (require, assert, only_owner, etc.) before modifying storage variables.",
+            ));
         }
+        None
     }
 }
 

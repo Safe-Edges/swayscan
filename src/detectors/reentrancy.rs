@@ -72,15 +72,148 @@ impl AstVisitor for ReentrancyVisitor {
         self.has_reentrancy_guard = false;
         self.current_function_state_changes.clear();
         self.current_function_external_calls.clear();
-        
-        // Visit all statements in the function body
-        for statement in &function.body {
-            self.visit_statement(statement);
+
+        // Track the order of operations
+        let mut op_timeline = Vec::new(); // Vec<(op_type, desc)>
+        fn walk_for_ops(stmts: &[SwayStatement], op_timeline: &mut Vec<(String, String)>, guard: &mut bool) {
+            use crate::parser::StatementKind::*;
+            for stmt in stmts {
+                match &stmt.kind {
+                    Storage(storage_stmt) => {
+                        if storage_stmt.operation == crate::parser::StorageOperation::Write || storage_stmt.operation == crate::parser::StorageOperation::Both {
+                            op_timeline.push(("state_change".to_string(), storage_stmt.field.clone()));
+                        }
+                    }
+                    Expression(expr) => {
+                        walk_expr_for_ops(expr, op_timeline, guard);
+                    }
+                    Require(_) | Assert(_) => {}
+                    If(if_stmt) => {
+                        walk_for_ops(&if_stmt.then_block, op_timeline, guard);
+                        if let Some(else_block) = &if_stmt.else_block {
+                            walk_for_ops(else_block, op_timeline, guard);
+                        }
+                    }
+                    While(while_stmt) => walk_for_ops(&while_stmt.body, op_timeline, guard),
+                    For(for_stmt) => walk_for_ops(&for_stmt.body, op_timeline, guard),
+                    Match(match_stmt) => {
+                        for arm in &match_stmt.arms {
+                            walk_for_ops(&arm.body, op_timeline, guard);
+                        }
+                    }
+                    Block(stmts) => walk_for_ops(stmts, op_timeline, guard),
+                    _ => {}
+                }
+            }
         }
-        
-        // Analyze the order of operations for reentrancy vulnerabilities
-        self.analyze_reentrancy_patterns(function);
-        
+        fn walk_expr_for_ops(expr: &SwayExpression, op_timeline: &mut Vec<(String, String)>, guard: &mut bool) {
+            use crate::parser::ExpressionKind::*;
+            match &expr.kind {
+                FunctionCall(call) => {
+                    let func = call.function.as_str();
+                    // Recognize Sway-specific external calls
+                    if ["transfer", "mint_to", "call", "call_with_function_selector", "force_transfer_to_contract", "transfer_to_address"].contains(&func) {
+                        op_timeline.push(("external_call".to_string(), func.to_string()));
+                    }
+                    // Recognize custom reentrancy guards
+                    if func == "non_reentrant" || func == "reentrancy_guard" || func.contains("no_reentrancy") {
+                        *guard = true;
+                    }
+                    for arg in &call.arguments {
+                        walk_expr_for_ops(arg, op_timeline, guard);
+                    }
+                }
+                MethodCall(mc) => {
+                    walk_expr_for_ops(&mc.receiver, op_timeline, guard);
+                    for arg in &mc.arguments {
+                        walk_expr_for_ops(arg, op_timeline, guard);
+                    }
+                }
+                Binary(bin) => {
+                    walk_expr_for_ops(&bin.left, op_timeline, guard);
+                    walk_expr_for_ops(&bin.right, op_timeline, guard);
+                }
+                Unary(u) => walk_expr_for_ops(&u.operand, op_timeline, guard),
+                If(if_expr) => {
+                    walk_expr_for_ops(&if_expr.condition, op_timeline, guard);
+                    walk_expr_for_ops(&if_expr.then_expr, op_timeline, guard);
+                    if let Some(else_expr) = &if_expr.else_expr {
+                        walk_expr_for_ops(else_expr, op_timeline, guard);
+                    }
+                }
+                Match(match_expr) => {
+                    walk_expr_for_ops(&match_expr.expression, op_timeline, guard);
+                    for arm in &match_expr.arms {
+                        for stmt in &arm.body {
+                            if let crate::parser::StatementKind::Expression(e) = &stmt.kind {
+                                walk_expr_for_ops(e, op_timeline, guard);
+                            }
+                        }
+                    }
+                }
+                Block(stmts) => walk_for_ops(stmts, op_timeline, guard),
+                Array(arr) | Tuple(arr) => {
+                    for e in arr {
+                        walk_expr_for_ops(e, op_timeline, guard);
+                    }
+                }
+                Struct(se) => {
+                    for f in &se.fields {
+                        walk_expr_for_ops(&f.value, op_timeline, guard);
+                    }
+                }
+                Index(idx) => {
+                    walk_expr_for_ops(&idx.array, op_timeline, guard);
+                    walk_expr_for_ops(&idx.index, op_timeline, guard);
+                }
+                Field(fe) => walk_expr_for_ops(&fe.receiver, op_timeline, guard),
+                Parenthesized(e) => walk_expr_for_ops(e, op_timeline, guard),
+                _ => {}
+            }
+        }
+        walk_for_ops(&function.body, &mut op_timeline, &mut self.has_reentrancy_guard);
+        // Print the operation timeline for debugging
+
+        // Analyze order: look for external call before state change
+        let mut found_external_before_state = false;
+        let mut found_state_before_external = false;
+        let mut first_external = None;
+        let mut first_state = None;
+        for (i, (op, desc)) in op_timeline.iter().enumerate() {
+            if op == "external_call" && first_external.is_none() {
+                first_external = Some(i);
+            }
+            if op == "state_change" && first_state.is_none() {
+                first_state = Some(i);
+            }
+        }
+        if let (Some(ext_idx), Some(st_idx)) = (first_external, first_state) {
+            if ext_idx < st_idx {
+                found_external_before_state = true;
+            } else if st_idx < ext_idx {
+                found_state_before_external = true;
+            }
+        }
+        // Report findings
+        if found_external_before_state {
+            self.findings.push(AstFinding::new(
+                "reentrancy",
+                "High",
+                "Reentrancy risk: external call occurs before state change.",
+                (function.span.start, function.span.end),
+                format!("Order: {:?}", op_timeline),
+                "Move state changes before external calls and/or add a reentrancy guard.",
+            ));
+        } else if found_state_before_external && !self.has_reentrancy_guard {
+            self.findings.push(AstFinding::new(
+                "reentrancy",
+                "Medium",
+                "Potential reentrancy: state change before external call, but no reentrancy guard.",
+                (function.span.start, function.span.end),
+                format!("Order: {:?}", op_timeline),
+                "Consider adding a reentrancy guard for extra safety.",
+            ));
+        }
         self.findings.clone()
     }
 

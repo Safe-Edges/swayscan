@@ -10,159 +10,251 @@ impl BusinessLogicDetector {
     }
 
     fn analyze_function_business_logic(&self, function: &SwayFunction, file: &SwayFile, ast: &SwayAst) -> Option<Finding> {
-        // Advanced: Walk nested AST nodes, track data/control flow, check for business logic violations, inter-function analysis
-        let mut found = false;
-        let mut line_number = function.span.start;
-        let mut issue_type = String::new();
-        let mut has_validation = false;
-        let mut has_balance_check = false;
-        let mut has_supply_check = false;
-        let mut has_deadline_check = false;
-        let mut business_logic_lines = Vec::new();
-        let lines: Vec<&str> = function.content.lines().collect();
-        
-        for (idx, line) in lines.iter().enumerate() {
-            let l = line.trim();
-            
-            // State inconsistency patterns
-            if l.contains("storage.balance.write") && l.contains("storage.total_supply.write") {
-                found = true;
-                issue_type = "state_inconsistency".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            // Business rule violations
-            if l.contains("transfer") && l.contains("amount") && l.contains(">") && l.contains("balance") {
-                found = true;
-                issue_type = "transfer_exceeds_balance".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            if l.contains("mint") && !l.contains("supply_check") && !l.contains("cap") {
-                found = true;
-                issue_type = "unlimited_minting".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            if l.contains("withdraw") && !l.contains("balance_check") {
-                found = true;
-                issue_type = "withdraw_without_balance_check".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            if l.contains("burn") && l.contains("amount") && l.contains(">") && l.contains("total_supply") {
-                found = true;
-                issue_type = "burn_exceeds_supply".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            // Time-based logic issues
-            if l.contains("block.timestamp") && (l.contains(">=") || l.contains("<=") || l.contains("+")) {
-                found = true;
-                issue_type = "time_based_logic".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            if l.contains("deadline") && l.contains("block.timestamp") {
-                found = true;
-                issue_type = "deadline_logic".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            // Economic logic flaws
-            if l.contains("price") && l.contains("*") && l.contains("/") {
-                found = true;
-                issue_type = "price_calculation".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            if l.contains("fee") && l.contains("=") && l.contains("*") {
-                found = true;
-                issue_type = "fee_calculation".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            // Access pattern violations
-            if l.contains("msg.sender") && l.contains("owner") && l.contains("storage.owner.write") {
-                found = true;
-                issue_type = "owner_changing_ownership".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            if l.contains("transfer") && l.contains("msg.sender") {
-                found = true;
-                issue_type = "self_transfer".to_string();
-                business_logic_lines.push(idx + line_number);
-            }
-            
-            // Validation checks
-            if l.contains("require(") || l.contains("assert(") {
-                has_validation = true;
-            }
-            
-            if l.contains("balance") && l.contains("check") {
-                has_balance_check = true;
-            }
-            
-            if l.contains("supply") && l.contains("check") {
-                has_supply_check = true;
-            }
-            
-            if l.contains("deadline") && l.contains("check") {
-                has_deadline_check = true;
+        use crate::parser::{StatementKind, ExpressionKind, SwayStatement, SwayExpression};
+        // State for tracking business logic issues
+        struct BizState {
+            balance_written: bool,
+            supply_written: bool,
+            cap_written: bool,
+            owner_written: bool,
+            has_validation: bool,
+            has_balance_check: bool,
+            has_supply_check: bool,
+            has_deadline_check: bool,
+            found_issue: Option<String>,
+        }
+        fn walk_for_biz_issues(stmts: &[SwayStatement], state: &mut BizState) {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StatementKind::Storage(storage_stmt) => {
+                        match storage_stmt.field.as_str() {
+                            "balance" => state.balance_written = true,
+                            "total_supply" | "supply" => state.supply_written = true,
+                            "cap" => state.cap_written = true,
+                            "owner" => state.owner_written = true,
+                            _ => {}
+                        }
+                    }
+                    StatementKind::Expression(expr) => {
+                        walk_expr_for_biz_issues(expr, state);
+                    }
+                    StatementKind::Require(_) | StatementKind::Assert(_) => {
+                        state.has_validation = true;
+                    }
+                    StatementKind::If(if_stmt) => {
+                        walk_for_biz_issues(&if_stmt.then_block, state);
+                        if let Some(else_block) = &if_stmt.else_block {
+                            walk_for_biz_issues(else_block, state);
+                        }
+                    }
+                    StatementKind::While(while_stmt) => walk_for_biz_issues(&while_stmt.body, state),
+                    StatementKind::For(for_stmt) => walk_for_biz_issues(&for_stmt.body, state),
+                    StatementKind::Match(match_stmt) => {
+                        for arm in &match_stmt.arms {
+                            walk_for_biz_issues(&arm.body, state);
+                        }
+                    }
+                    StatementKind::Block(stmts) => walk_for_biz_issues(stmts, state),
+                    _ => {}
+                }
             }
         }
-        
-        // Inter-function: check if this function is called by another public function
-        let mut called_by_public = false;
-        for f in &ast.functions {
-            if f.name != function.name && f.content.contains(&function.name) && matches!(f.visibility, crate::parser::FunctionVisibility::Public) {
-                called_by_public = true;
-                break;
+        fn walk_expr_for_biz_issues(expr: &SwayExpression, state: &mut BizState) {
+            use ExpressionKind::*;
+            match &expr.kind {
+                FunctionCall(call) => {
+                    // Detect transfer, mint, burn, withdraw, etc.
+                    let func = call.function.as_str();
+                    if func == "transfer" {
+                        state.found_issue.get_or_insert("transfer".to_string());
+                    } else if func == "mint" {
+                        state.found_issue.get_or_insert("mint".to_string());
+                    } else if func == "burn" {
+                        state.found_issue.get_or_insert("burn".to_string());
+                    } else if func == "withdraw" {
+                        state.found_issue.get_or_insert("withdraw".to_string());
+                    }
+                    for arg in &call.arguments {
+                        walk_expr_for_biz_issues(arg, state);
+                    }
+                }
+                MethodCall(mc) => {
+                    walk_expr_for_biz_issues(&mc.receiver, state);
+                    for arg in &mc.arguments {
+                        walk_expr_for_biz_issues(arg, state);
+                    }
+                }
+                Binary(bin) => {
+                    walk_expr_for_biz_issues(&bin.left, state);
+                    walk_expr_for_biz_issues(&bin.right, state);
+                }
+                Unary(u) => walk_expr_for_biz_issues(&u.operand, state),
+                If(if_expr) => {
+                    walk_expr_for_biz_issues(&if_expr.condition, state);
+                    walk_expr_for_biz_issues(&if_expr.then_expr, state);
+                    if let Some(else_expr) = &if_expr.else_expr {
+                        walk_expr_for_biz_issues(else_expr, state);
+                    }
+                }
+                Match(match_expr) => {
+                    walk_expr_for_biz_issues(&match_expr.expression, state);
+                    for arm in &match_expr.arms {
+                        for stmt in &arm.body {
+                            if let StatementKind::Expression(e) = &stmt.kind {
+                                walk_expr_for_biz_issues(e, state);
+                            }
+                        }
+                    }
+                }
+                Block(stmts) => walk_for_biz_issues(stmts, state),
+                Array(arr) | Tuple(arr) => {
+                    for e in arr {
+                        walk_expr_for_biz_issues(e, state);
+                    }
+                }
+                Struct(se) => {
+                    for f in &se.fields {
+                        walk_expr_for_biz_issues(&f.value, state);
+                    }
+                }
+                Index(idx) => {
+                    walk_expr_for_biz_issues(&idx.array, state);
+                    walk_expr_for_biz_issues(&idx.index, state);
+                }
+                Field(fe) => walk_expr_for_biz_issues(&fe.receiver, state),
+                Parenthesized(e) => walk_expr_for_biz_issues(e, state),
+                _ => {}
             }
         }
-        
-        if found && (!has_validation || !has_balance_check || !has_supply_check || !has_deadline_check || called_by_public) {
-            let mut description = format!("Function '{}' contains potential business logic vulnerability ({}).", function.name, issue_type);
-            if !has_validation {
+        // --- Manipulatable Balance Usage Detection ---
+        // Track storage fields named 'balance'
+        let mut balance_fields = vec![];
+        for field in &ast.storage_fields {
+            if field.name.to_lowercase().contains("balance") {
+                balance_fields.push(field.name.clone());
+            }
+        }
+        // Track if balance is used in arithmetic and then in a transfer
+        let mut balance_used_in_arith = false;
+        let mut transfer_uses_balance = false;
+        fn walk_for_balance_arith(stmts: &[SwayStatement], balance_fields: &[String], used_in_arith: &mut bool, used_in_transfer: &mut bool) {
+            use crate::parser::StatementKind::*;
+            for stmt in stmts {
+                match &stmt.kind {
+                    Expression(expr) => {
+                        walk_expr_for_balance_arith(expr, balance_fields, used_in_arith, used_in_transfer);
+                    }
+                    If(if_stmt) => {
+                        walk_for_balance_arith(&if_stmt.then_block, balance_fields, used_in_arith, used_in_transfer);
+                        if let Some(else_block) = &if_stmt.else_block {
+                            walk_for_balance_arith(else_block, balance_fields, used_in_arith, used_in_transfer);
+                        }
+                    }
+                    While(while_stmt) => walk_for_balance_arith(&while_stmt.body, balance_fields, used_in_arith, used_in_transfer),
+                    For(for_stmt) => walk_for_balance_arith(&for_stmt.body, balance_fields, used_in_arith, used_in_transfer),
+                    Match(match_stmt) => {
+                        for arm in &match_stmt.arms {
+                            walk_for_balance_arith(&arm.body, balance_fields, used_in_arith, used_in_transfer);
+                        }
+                    }
+                    Block(stmts) => walk_for_balance_arith(stmts, balance_fields, used_in_arith, used_in_transfer),
+                    _ => {}
+                }
+            }
+        }
+        fn walk_expr_for_balance_arith(expr: &SwayExpression, balance_fields: &[String], used_in_arith: &mut bool, used_in_transfer: &mut bool) {
+            use ExpressionKind::*;
+            match &expr.kind {
+                Binary(bin) => {
+                    let left = format!("{}", bin.left);
+                    let right = format!("{}", bin.right);
+                    if balance_fields.iter().any(|b| left.contains(b) || right.contains(b)) {
+                        *used_in_arith = true;
+                    }
+                    walk_expr_for_balance_arith(&bin.left, balance_fields, used_in_arith, used_in_transfer);
+                    walk_expr_for_balance_arith(&bin.right, balance_fields, used_in_arith, used_in_transfer);
+                }
+                FunctionCall(call) => {
+                    let func = call.function.as_str();
+                    if ["transfer", "transfer_to_address", "force_transfer_to_contract", "call_with_function_selector"].contains(&func) {
+                        for arg in &call.arguments {
+                            let arg_str = format!("{}", arg);
+                            if balance_fields.iter().any(|b| arg_str.contains(b)) {
+                                *used_in_transfer = true;
+                            }
+                        }
+                    }
+                    for arg in &call.arguments {
+                        walk_expr_for_balance_arith(arg, balance_fields, used_in_arith, used_in_transfer);
+                    }
+                }
+                MethodCall(mc) => {
+                    walk_expr_for_balance_arith(&mc.receiver, balance_fields, used_in_arith, used_in_transfer);
+                    for arg in &mc.arguments {
+                        walk_expr_for_balance_arith(arg, balance_fields, used_in_arith, used_in_transfer);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk_for_balance_arith(&function.body, &balance_fields, &mut balance_used_in_arith, &mut transfer_uses_balance);
+        if balance_used_in_arith && transfer_uses_balance {
+            let description = format!("Function '{}' contains manipulatable balance usage: balance is used in arithmetic and then in a transfer operation.", function.name);
+            return Some(Finding::new(
+                "business_logic",
+                Severity::Medium,
+                Category::BusinessLogic,
+                0.8,
+                &format!("Manipulatable Balance Usage - {}", function.name),
+                &description,
+                &file.path,
+                function.span.start,
+                function.span.start,
+                &function.content,
+                "Avoid using balances in arithmetic before transfers to prevent manipulation.",
+            ));
+        }
+        // Analyze function
+        let mut state = BizState {
+            balance_written: false,
+            supply_written: false,
+            cap_written: false,
+            owner_written: false,
+            has_validation: false,
+            has_balance_check: false,
+            has_supply_check: false,
+            has_deadline_check: false,
+            found_issue: None,
+        };
+        walk_for_biz_issues(&function.body, &mut state);
+        // Only flag if a critical operation is performed without the necessary business check
+        if let Some(issue) = &state.found_issue {
+            let mut description = format!("Function '{}' contains potential business logic vulnerability ({}).", function.name, issue);
+            if !state.has_validation {
                 description.push_str(" No validation detected.");
             }
-            if !has_balance_check {
+            if !state.has_balance_check && issue == "transfer" {
                 description.push_str(" No balance check detected.");
             }
-            if !has_supply_check {
-                description.push_str(" No supply check detected.");
+            if !state.has_supply_check && issue == "mint" {
+                description.push_str(" No supply cap check detected.");
             }
-            if !has_deadline_check {
-                description.push_str(" No deadline check detected.");
-            }
-            if called_by_public {
-                description.push_str(" This function is reachable from a public function.");
-            }
-            
-            let severity = match issue_type.as_str() {
-                "transfer_exceeds_balance" | "unlimited_minting" | "burn_exceeds_supply" => Severity::Critical,
-                "state_inconsistency" | "withdraw_without_balance_check" | "owner_changing_ownership" => Severity::High,
-                "time_based_logic" | "deadline_logic" | "price_calculation" | "fee_calculation" => Severity::Medium,
-                _ => Severity::Medium,
-            };
-            
-            Some(Finding::new(
+            // ... add more Sway-specific checks as needed
+            return Some(Finding::new(
                 "business_logic",
-                severity,
+                Severity::High,
                 Category::BusinessLogic,
                 0.9,
                 &format!("Business Logic Vulnerability Detected - {}", function.name),
                 &description,
                 &file.path,
-                line_number,
-                line_number,
+                function.span.start,
+                function.span.start,
                 &function.content,
                 "Implement proper business rule validation, balance checks, supply caps, and deadline validation.",
-            ))
-        } else {
-            None
+            ));
         }
+        None
     }
 }
 

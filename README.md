@@ -9,7 +9,7 @@
 
 SwayScanner performs deep **AST-based static analysis** on Sway smart contracts to identify security vulnerabilities, code quality issues, and best practice violations. Built by the **Safe Edges Team** to secure the decentralized future.
 
-## 🚀 Features
+##  Features
 
 - **AST-Based Analysis**: Uses Sway language AST for accurate parsing and analysis
 - **Comprehensive Security Analysis**: Detects 14+ categories of vulnerabilities including reentrancy, access control issues, oracle manipulation, and more
@@ -106,29 +106,9 @@ swayscan contract.sw --severity-filter high
 # Verbose output with detailed AST analysis
 swayscan contract.sw --verbose
 
-# Set confidence threshold
-swayscan contract.sw --confidence-threshold 0.8
 ```
 
-### Forc Plugin Usage
-
-When using as a Forc plugin, SwayScanner automatically detects your project structure:
-
-```bash
-# Navigate to any Forc project
-cd my-sway-project
-
-# Run AST-based security analysis
-forc swayscan
-
-# Generate audit report
-forc swayscan --markdown-report security-audit.md
-
-# Scan with high severity findings only
-forc swayscan --severity-filter high --fail-on high
-```
-
-## 🛡️ Vulnerability Detection
+##  Vulnerability Detection
 
 SwayScanner uses AST-based analysis to detect the following vulnerability categories:
 
@@ -151,7 +131,7 @@ SwayScanner uses AST-based analysis to detect the following vulnerability catego
 - **Code Quality**: Unused variables, imports, and dead code
 - **Best Practices**: Magic numbers and coding standard violations
 
-## 📋 Example Output
+##  Example Output
 
 ```
 ================================================================================
@@ -189,7 +169,7 @@ MEDIUM: input_validation
 └─ Risk: Invalid parameters may cause unexpected behavior
 ```
 
-## 📚 Examples
+##  Examples
 
 Check out the `examples/` directory for sample vulnerable contracts to test SwayScanner:
 
@@ -217,7 +197,7 @@ format = "text"
 color = true
 ```
 
-## 📖 Documentation
+##  Documentation
 
 - **API Documentation**: [docs.rs/swayscan](https://docs.rs/swayscan)
 - **Repository**: [github.com/Safe-Edges/swayscan](https://github.com/Safe-Edges/swayscan)
@@ -247,5 +227,5 @@ SwayScanner is developed by **Safe Edges**, a team dedicated to securing the dec
 
 ---
 
-**Made with ❤️ by the Safe Edges Team** 
+**Made by the Safe Edges Team** 
  

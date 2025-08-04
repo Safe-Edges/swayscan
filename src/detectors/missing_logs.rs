@@ -10,80 +10,121 @@ impl MissingLogsDetector {
     }
 
     fn analyze_function_missing_logs(&self, function: &SwayFunction, file: &SwayFile, ast: &SwayAst) -> Option<Finding> {
-        // Only detect missing logs-specific issues, not business logic, access control, or other detectors
-        let mut found = false;
-        let mut line_number = function.span.start;
-        let mut has_critical_operation = false;
-        let mut has_logging = false;
-        let mut has_events = false;
-        let mut operation_lines = Vec::new();
-        let lines: Vec<&str> = function.content.lines().collect();
-        
-        for (idx, line) in lines.iter().enumerate() {
-            let l = line.trim();
-            
-            // Check for critical operations that should be logged
-            if l.contains("transfer") || l.contains("mint") || l.contains("burn") || l.contains("withdraw") || 
-               l.contains("deposit") || l.contains("stake") || l.contains("unstake") || l.contains("claim") {
-                has_critical_operation = true;
-                operation_lines.push(idx + line_number);
-            }
-            
-            // Check for logging mechanisms
-            if l.contains("log") || l.contains("emit") || l.contains("event") {
-                has_logging = true;
-            }
-            
-            // Check for event declarations
-            if l.contains("event") || l.contains("struct") {
-                has_events = true;
-            }
-            
-            // Check for state changes without logging
-            if l.contains("storage") && (l.contains("write") || l.contains("set")) {
-                if !l.contains("log") && !l.contains("emit") {
-                    found = true;
+        use crate::parser::{StatementKind, ExpressionKind, SwayStatement, SwayExpression};
+        struct LogState {
+            has_critical_op: bool,
+            has_logging: bool,
+        }
+        fn walk_for_logs(stmts: &[SwayStatement], state: &mut LogState) {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StatementKind::Storage(storage_stmt) => {
+                        if storage_stmt.operation == crate::parser::StorageOperation::Write {
+                            state.has_critical_op = true;
+                        }
+                    }
+                    StatementKind::Expression(expr) => {
+                        walk_expr_for_logs(expr, state);
+                    }
+                    StatementKind::If(if_stmt) => {
+                        walk_for_logs(&if_stmt.then_block, state);
+                        if let Some(else_block) = &if_stmt.else_block {
+                            walk_for_logs(else_block, state);
+                        }
+                    }
+                    StatementKind::While(while_stmt) => walk_for_logs(&while_stmt.body, state),
+                    StatementKind::For(for_stmt) => walk_for_logs(&for_stmt.body, state),
+                    StatementKind::Match(match_stmt) => {
+                        for arm in &match_stmt.arms {
+                            walk_for_logs(&arm.body, state);
+                        }
+                    }
+                    StatementKind::Block(stmts) => walk_for_logs(stmts, state),
+                    _ => {}
                 }
             }
         }
-        
-        // Inter-function: check if this function is called by another public function
-        let mut called_by_public = false;
-        for f in &ast.functions {
-            if f.name != function.name && f.content.contains(&function.name) && matches!(f.visibility, crate::parser::FunctionVisibility::Public) {
-                called_by_public = true;
-                break;
+        fn walk_expr_for_logs(expr: &SwayExpression, state: &mut LogState) {
+            use ExpressionKind::*;
+            match &expr.kind {
+                FunctionCall(call) => {
+                    // Detect critical operations
+                    match call.function.as_str() {
+                        "transfer" | "mint" | "burn" | "withdraw" | "deposit" | "stake" | "unstake" | "claim" => state.has_critical_op = true,
+                        "emit" | "log" => state.has_logging = true,
+                        _ => {}
+                    };
+                    for arg in &call.arguments {
+                        walk_expr_for_logs(arg, state);
+                    }
+                }
+                MethodCall(mc) => {
+                    walk_expr_for_logs(&mc.receiver, state);
+                    for arg in &mc.arguments {
+                        walk_expr_for_logs(arg, state);
+                    }
+                }
+                Binary(bin) => {
+                    walk_expr_for_logs(&bin.left, state);
+                    walk_expr_for_logs(&bin.right, state);
+                }
+                Unary(u) => walk_expr_for_logs(&u.operand, state),
+                If(if_expr) => {
+                    walk_expr_for_logs(&if_expr.condition, state);
+                    walk_expr_for_logs(&if_expr.then_expr, state);
+                    if let Some(else_expr) = &if_expr.else_expr {
+                        walk_expr_for_logs(else_expr, state);
+                    }
+                }
+                Match(match_expr) => {
+                    walk_expr_for_logs(&match_expr.expression, state);
+                    for arm in &match_expr.arms {
+                        for stmt in &arm.body {
+                            if let StatementKind::Expression(e) = &stmt.kind {
+                                walk_expr_for_logs(e, state);
+                            }
+                        }
+                    }
+                }
+                Block(stmts) => walk_for_logs(stmts, state),
+                Array(arr) | Tuple(arr) => {
+                    for e in arr {
+                        walk_expr_for_logs(e, state);
+                    }
+                }
+                Struct(se) => {
+                    for f in &se.fields {
+                        walk_expr_for_logs(&f.value, state);
+                    }
+                }
+                Index(idx) => {
+                    walk_expr_for_logs(&idx.array, state);
+                    walk_expr_for_logs(&idx.index, state);
+                }
+                Field(fe) => walk_expr_for_logs(&fe.receiver, state),
+                Parenthesized(e) => walk_expr_for_logs(e, state),
+                _ => {}
             }
         }
-        
-        if found && has_critical_operation && (!has_logging || !has_events || called_by_public) {
-            let mut description = format!("Function '{}' contains critical operations without proper logging.", function.name);
-            if !has_logging {
-                description.push_str(" No logging mechanisms detected.");
-            }
-            if !has_events {
-                description.push_str(" No event declarations detected.");
-            }
-            if called_by_public {
-                description.push_str(" This function is reachable from a public function.");
-            }
-            
-            Some(Finding::new(
+        let mut state = LogState { has_critical_op: false, has_logging: false };
+        walk_for_logs(&function.body, &mut state);
+        if state.has_critical_op && !state.has_logging {
+            let description = format!("Function '{}' contains critical operations without proper logging or event emission.", function.name);
+            return Some(Finding::new(
                 "missing_logs",
-                Severity::Medium,
+                Severity::Low,
                 Category::Security,
                 0.7,
                 &format!("Missing Logs Detected - {}", function.name),
                 &description,
                 &file.path,
-                line_number,
-                line_number,
+                function.span.start,
+                function.span.start,
                 &function.content,
                 "Add proper logging and event emissions for critical operations.",
-            ))
-        } else {
-            None
+            ));
         }
+        None
     }
 }
 

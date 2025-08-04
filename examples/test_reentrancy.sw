@@ -83,6 +83,7 @@ fn vulnerable_multi_call(recipient1: Address, recipient2: Address, amount: u64) 
     transfer(Identity::Address(recipient1), AssetId::base(), amount);
     transfer(Identity::Address(recipient2), AssetId::base(), amount);
     
+    
     // VULNERABLE: State change after external calls
     storage.balances.insert(sender, balance - (amount * 2));
 }

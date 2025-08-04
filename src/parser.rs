@@ -132,7 +132,7 @@ pub struct StorageStatement {
     pub operation: StorageOperation,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StorageOperation {
     Read,
     Write,
