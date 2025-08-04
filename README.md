@@ -14,7 +14,6 @@ SwayScanner performs deep **AST-based static analysis** on Sway smart contracts 
 - **AST-Based Analysis**: Uses Sway language AST for accurate parsing and analysis
 - **Comprehensive Security Analysis**: Detects 14+ categories of vulnerabilities including reentrancy, access control issues, oracle manipulation, and more
 - **Professional Reports**: Export findings as beautifully formatted Markdown or PDF audit reports
-- **Forc Plugin Support**: Seamlessly integrates with Forc workflow (`forc swayscan`)
 - **Minimal False Positives**: Advanced AST analysis techniques reduce noise and focus on real issues
 - **Grouped Findings**: Similar issues are intelligently grouped for better readability
 - **Colored Output**: Professional terminal output with severity-based color coding
@@ -45,13 +44,9 @@ SwayScanner performs deep **AST-based static analysis** on Sway smart contracts 
 cargo install swayscan
 ```
 
-### As Forc Plugin
-
-SwayScanner automatically installs as a Forc plugin when installed via cargo:
 
 ```bash
 cargo install swayscan
-forc swayscan --version  # Verify installation
 ```
 
 ### From Source
