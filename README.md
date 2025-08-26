@@ -195,7 +195,6 @@ color = true
 
 ##  Documentation
 
-- **API Documentation**: [docs.rs/swayscan](https://docs.rs/swayscan)
 - **Repository**: [github.com/Safe-Edges/swayscan](https://github.com/Safe-Edges/swayscan)
 - **Website**: [safeedges.in](https://safeedges.in)
 
